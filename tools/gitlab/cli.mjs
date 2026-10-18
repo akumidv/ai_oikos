@@ -3,8 +3,7 @@
 // Jira task's code lives — for work that is not sitting in a checkout: the project is always named (--project group/name).
 // Every command is a read.
 import { runCli, required, printJson, UsageError } from '../common/cli.mjs';
-import { lookup, credentialsHelp } from '../common/env.mjs';
-import { request, HttpError } from '../common/http.mjs';
+import { gitlabClient, projectPath as proj } from '../common/gitlab.mjs';
 
 const TAIL_LINES = 40;
 // Broad on purpose: a missed error line costs a second command, a spurious one costs a line.
@@ -13,42 +12,7 @@ const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 // A task key matches only as a whole token: PROJ-123 never matches PROJ-1234 or XPROJ-123.
 const wholeToken = (key, text) => Boolean(text) && new RegExp(`(?<![A-Za-z0-9-])${key.replace(/[-]/g, '\\-')}(?![A-Za-z0-9-])`).test(text);
 
-function gl() {
-  const url = lookup('GITLAB_URL').value;
-  // Without the site there is no token page to point at either: name the key and stop before any request.
-  if (!url) throw new UsageError(`no GITLAB_URL\n${credentialsHelp(['GITLAB_URL', 'GITLAB_TOKEN'])}`);
-  const base = url.replace(/\/+$/, '');
-  const token = lookup('GITLAB_TOKEN').value;
-  const help = () => credentialsHelp(['GITLAB_URL', 'GITLAB_TOKEN'], {
-    extra: [`  Token (scope read_api or api): ${base}/-/user_settings/personal_access_tokens`],
-  });
-  if (!token) throw new UsageError(`no GITLAB_TOKEN\n${help()}`);
-  const api = async (path, opts = {}) => {
-    try {
-      return await request(`${base}/api/v4${path}`, { tool: 'gitlab', headers: { 'PRIVATE-TOKEN': token }, ...opts });
-    } catch (e) {
-      if (e instanceof HttpError && e.status === 401) throw new UsageError(`GitLab rejected the token (401)\n${help()}`);
-      if (e instanceof HttpError && e.status === 404) throw new UsageError(`not found, or no access (GitLab answers 404 for both): ${path}`);
-      throw e;
-    }
-  };
-  const get = async (path) => (await api(path)).data;
-  /** Follow X-Next-Page until `limit` rows. */
-  const paged = async (path, limit) => {
-    const rows = [];
-    let page = 1;
-    while (page && rows.length < limit) {
-      const sep = path.includes('?') ? '&' : '?';
-      const r = await api(`${path}${sep}per_page=${Math.min(limit, 100)}&page=${page}`);
-      rows.push(...r.data);
-      page = Number(r.headers.get('x-next-page')) || 0;
-    }
-    return rows.slice(0, limit);
-  };
-  return { base, get, api, paged };
-}
-
-const proj = (p) => encodeURIComponent(p);
+const gl = () => gitlabClient('gitlab');
 const when = (s) => (s ? s.slice(0, 16).replace('T', ' ') : '');
 const gist = (s, n = 72) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s || '');
 
@@ -199,4 +163,4 @@ const commands = {
   },
 };
 
-runCli('gitlab', commands);
+runCli('gitlab', commands, { connector: 'gitlab' });

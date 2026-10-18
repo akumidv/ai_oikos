@@ -4,12 +4,16 @@ import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { HttpError, ChannelError } from './http.mjs';
+import { INSTALL_FILE, installPath, installRoot } from './paths.mjs';
+import { config, listedConnectors } from './config.mjs';
 
 /**
  * commands: { name: { help, options, run(values, positionals) } }
  * options use util.parseArgs syntax; `--json` and `--help` are added to every command.
+ * `connector` names the connector a tool is (jira, gitlab, …): its commands run only in an
+ * installation that lists it (requireConnector); usage and `--help` print without the check.
  */
-export async function runCli(toolName, commands) {
+export async function runCli(toolName, commands, { connector } = {}) {
   // Node's fetch honours HTTP(S)_PROXY only when NODE_USE_ENV_PROXY=1 is set at startup; without
   // it a proxied machine lands on the Cloudflare Access login page. Re-run once with it set.
   const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
@@ -52,6 +56,7 @@ export async function runCli(toolName, commands) {
     return process.exit(0);
   }
   try {
+    if (connector) requireConnector(connector);
     const code = await cmd.run(parsed.values, parsed.positionals);
     process.exit(code ?? 0);
   } catch (e) {
@@ -66,6 +71,20 @@ export async function runCli(toolName, commands) {
 }
 
 export class UsageError extends Error {}
+
+/**
+ * Stop a connector tool before any credential lookup or request unless the installation uses it:
+ * `name` listed under some skill in `connectors:` of its `oikos.yaml`. A token exported in the
+ * shell reaches every installation on the machine; this keeps it out of those that do not use the
+ * connector. Outside any installation it is the no-installation error of paths.mjs.
+ */
+export function requireConnector(name) {
+  if (!installRoot()) installPath();
+  if (listedConnectors().has(name)) return;
+  const { problems } = config();
+  throw new UsageError(`${name} is not a connector of this installation — add it under connectors: in ${INSTALL_FILE} `
+    + `(node oikos/tools/landscape/cli.mjs skills lists them)${problems.length ? `; ${problems.join('; ')}` : ''}`);
+}
 
 /**
  * Whether the module at `url` is the program being run, not an import. Node resolves symlinks in

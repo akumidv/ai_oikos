@@ -164,10 +164,10 @@ anywhere by hand — OIKOS.md points at `npm run skills`.
 
 | Module | Owns |
 |---|---|
-| `cli.mjs` | commands on `util.parseArgs`, `--json`/`--help` everywhere, error → exit code, the proxy re-exec |
+| `cli.mjs` | commands on `util.parseArgs`, `--json`/`--help` everywhere, error → exit code, the proxy re-exec, the connector check (`requireConnector`) |
 | `http.mjs` | every outward request: named User-Agent, timeout, channel errors, Cloudflare detection; `download()` streams a large file (idle timeout, `.part` until complete) |
 | `paths.mjs` | the two roots: `CORE_ROOT` (the code, from `import.meta.url`) and `installRoot()` (`OIKOS_HOME` → `CLAUDE_PROJECT_DIR`/`QWEN_PROJECT_DIR` → the working folder and its parents); `localPath()` for `.local/`, throwing outside an installation |
-| `env.mjs` | settings and credentials: `.local/.env` → `settings` of `oikos.yaml` → environment (a fallback shared by every installation); presence only, never values; `orgEmail()`; `isWsl()`, `environment()` — os, wsl, display |
+| `env.mjs` | settings and credentials: `.local/.env` → `settings` of `oikos.yaml` → environment (a fallback shared by every installation); presence only, never values; `orgEmail()`, `orgGitEmail()` (the git email, only inside a configured domain); `isWsl()`, `environment()` — os, wsl, display |
 | `config.mjs` | the installation's `oikos.yaml`: organization, connectors per skill, settings, MCP servers, brand |
 | `files.mjs` | a path the user gave that does not exist: the similar files or folders that were probably meant (`missingMessage`) |
 | `programs.mjs` | external programs a tool drives (LibreOffice, Chrome): explicit `OIKOS_*_PATH` → system install → a copy in `node_modules/.cache/oikos`; missing shared libraries (ldd) |
@@ -183,8 +183,21 @@ Rules:
   used, not a constant at import, so `--help` and `npm run check` work in the core. A module that
   is both imported and run checks `isMain(import.meta.url)` (`common/cli.mjs`), never
   `import.meta.url === file://argv[1]`: through the link the two differ.
-- Read-only by default. A changing action has `--dry-run`, is forced into dry-run without
-  credentials, and says so. The guards (English-only comments, Jira transitions only among the
+- Read-only by default. A changing action has `--dry-run`.
+- **A connector's tool runs only where it is listed.** Its entry is `runCli('<tool>', commands,
+  { connector: '<name>' })`: before a command runs, `requireConnector` (`common/cli.mjs`) throws
+  `UsageError` (exit 1) unless the installation lists the connector under some skill in
+  `connectors:` — before any credential lookup or request, so a token from the shell reaches only
+  the installations that use the connector. Usage and `--help` print without the check; outside an
+  installation it is the no-installation error. Tools that are not a connector (landscape, catalog,
+  browser, documents, setup, sync, hooks) pass no `connector`. The same list decides the rest:
+  the tokens `setup` and the session-start hook ask for (`setup/tokens.mjs` `needed`) and the
+  connectors `landscape skills` shows as used — nothing listed, for a skill or at all, means no
+  connector, never every one.
+- Missing credentials or site settings are an error, the same in every connector: the command
+  throws `UsageError` (exit 1) naming each missing key (`credentialsHelp`) before any request —
+  never a fallback to a dry run, never exit 0. Only an explicit `--dry-run` whose preview reads
+  nothing from the site still runs without them, and says the write itself needs them. The guards (English-only comments, Jira transitions only among the
   statuses open to an agent, Confluence read-modify-write guards) are kept.
 - Every request goes through `common/http.mjs`, never a bare `fetch`.
 - Output is for an agent's context: compact lines, what was cut is stated, `--json` for the raw
@@ -251,7 +264,8 @@ note at all is valid — a fresh clone has none. Never a secret value.
   its `oikos.yaml`, resource notes, skill pointers, settings and `.mcp.json`.
 - `npm test` — installations made from examples/installation in temporary folders: each reads its
   own configuration through the shared core, sync keeps foreign wiring, `oikos/` is read-only
-  there, two installations never share a browser, `setup init`, the leak check.
+  there, two installations never share a browser (and the browser's MCP server refuses another's
+  Chrome), `setup init`, the leak check.
 - Before a commit of the core: `node tools/hooks/leaks.mjs` (git-guard runs it on the agent's
   `git commit`; `node tools/hooks/leaks.mjs install` makes it the user's pre-commit hook).
 - The development layer is akmon (`_aitna/akmon`, a submodule; the `## Dev layer — akmon` block of
@@ -285,6 +299,13 @@ A new host is an entry in `HOSTS`, a set of names in `host.mjs`, and nothing els
 then fails until its settings file is generated, so a host cannot be added half-wired. Both hosts
 gate the wiring on the folder being trusted (Qwen Code: hooks and project skills of an untrusted
 folder do not load at all), which `BOOTSTRAP.md § Set up` has the person confirm on the first start.
+Qwen Code reads `.mcp.json` too, but uses a server only once it is approved (`qwen mcp approve --all`,
+kept per folder and per server entry; a headless run skips an unapproved one silently), a step of
+the same section. Reading through the `oikos/` link needs leave on both: Claude Code gets the core's
+real path in `permissions.additionalDirectories` of `.claude/settings.local.json`, Qwen Code a
+relative `oikos` in `context.includeDirectories` of `.qwen/settings.json` (it resolves against the
+start folder and follows the link; without it every read through `oikos/` is refused) — sync adds
+both in an installation, never in the core.
 
 ## Development experience
 
@@ -297,6 +318,16 @@ folder do not load at all), which `BOOTSTRAP.md § Set up` has the person confir
   instead of falling back to it — a fallback would quietly read one organization's data from
   another's session. `oikos.yaml` keys holding only comments parse as null, which `config()` had
   reported as "must be a mapping" for every fresh template.
+
+- 2026-10-18 — The chrome-devtools MCP server attached to whatever answered on the port: `start`
+  checked whose Chrome it was, the server did not, so a session could drive another
+  installation's signed-in browser. The browser is now told by the installation's code (its folder
+  name), read from the `--user-data-dir` of the process on the port — the profile is
+  `<code>/.local/browser/chrome-profile`, so the code needs no file of its own and also names
+  another installation's Chrome. `checkPort` (`tools/browser/cli.mjs`) is the one check `start`,
+  `status`, `stop` and `mcp.mjs` make; `mcp.mjs` refuses before spawning `npx`, on stderr and as
+  the JSON-RPC error answering `initialize`, and exits 1. A profile set by `OIKOS_CHROME_PROFILE`
+  outside that layout is not recognised as another installation's ("a Chrome not started by oikos").
 
 - 2026-10-17 — The chrome-devtools MCP server timed out at session start (the host waits 30 s):
   `npx -y chrome-devtools-mcp@latest` through `cmd.exe` asks the registry on every start, which

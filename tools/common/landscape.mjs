@@ -49,8 +49,9 @@ function read(file, label, problems) {
 
 /**
  * Skills, resources and the links between them, plus every schema problem found.
- * skills: [{ ...frontmatter, dir, connectors: [name], configured: [name] | null, file }]
- *   (`configured` null = the installation does not choose, every connector is available);
+ * skills: [{ ...frontmatter, dir, connectors: [name], configured: [name], file }]
+ *   (`configured` is what the installation lists for the skill, default first; empty when it lists
+ *   none — then no connector of the skill is used here, as common/cli.mjs requireConnector enforces);
  * resources: [{ ...frontmatter, via: [name], purpose, file, skills: [name] }].
  */
 export function loadLandscape() {
@@ -75,8 +76,8 @@ export function loadLandscape() {
     const files = existsSync(cdir) ? readdirSync(cdir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)) : [];
     for (const c of connectors) if (!files.includes(c)) problems.push(`skills/${dir}/SKILL.md: connector '${c}' has no connectors/${c}.md`);
     for (const f of files) if (!connectors.includes(f)) problems.push(`skills/${dir}/connectors/${f}.md: not listed in the skill's 'connectors'`);
-    const configured = cfg.connectors[dir] ?? null;
-    for (const c of configured || []) if (!connectors.includes(c)) problems.push(`${INSTALL_FILE}: connectors.${dir} names '${c}', which the skill does not have (${connectors.join(', ') || 'none'})`);
+    const configured = cfg.connectors[dir] ?? [];
+    for (const c of configured) if (!connectors.includes(c)) problems.push(`${INSTALL_FILE}: connectors.${dir} names '${c}', which the skill does not have (${connectors.join(', ') || 'none'})`);
     skills.push({ ...fm, dir, connectors, configured, file: coreLabel(`skills/${dir}/SKILL.md`) });
   }
   for (const s of Object.keys(cfg.connectors)) if (!dirs.includes(s)) problems.push(`${INSTALL_FILE}: connectors.${s} — no such skill`);

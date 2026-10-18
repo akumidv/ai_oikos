@@ -51,3 +51,6 @@ not offered — a person does them in Confluence.
 The same Atlassian identity as Jira (`JIRA_EMAIL`, `JIRA_API_TOKEN`) — see the `jira` connector of
 the skill `task-tracking`.
 `CONFLUENCE_*` variables override them only if Confluence ever needs a different identity.
+Without them every command stops with exit 1 and names the missing keys, before any request; only
+`append --dry-run` and `create --dry-run`, whose preview reads nothing from Confluence, still show
+it — the write itself needs the credentials.

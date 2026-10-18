@@ -3,4 +3,8 @@
 export const WRITES = {
   jira: ['comment', 'transition', 'create', 'edit', 'move-to-sprint', 'link', 'goal-comment'],
   confluence: ['append', 'create', 'replace-section'],
+  'github-issues': ['create', 'edit', 'comment', 'transition', 'move-to-sprint', 'link'],
+  'gitlab-issues': ['create', 'edit', 'comment', 'transition', 'move-to-sprint', 'link'],
+  'github-wiki': ['create', 'append', 'replace-section'],
+  'gitlab-wiki': ['create', 'append', 'replace-section'],
 };

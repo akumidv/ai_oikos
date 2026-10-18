@@ -4,7 +4,6 @@
 # start; what Claude Code fixes itself and what a session leaves beside the wiring is not.
 .claude/settings.local.json
 .claude/worktrees/
-.qwen/settings.local.json
 .qwen/worktrees/
 .qwen/tmp/
 CLAUDE.local.md

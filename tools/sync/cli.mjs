@@ -10,7 +10,8 @@
 //   - oikos's own MCP servers plus the installation's (`mcp_servers` of oikos.yaml) → .mcp.json,
 //     git-ignored, with this machine's absolute paths and OIKOS_HOME;
 //   - the core's real path → `permissions.additionalDirectories` of .claude/settings.local.json,
-//     so the host reads oikos through the `oikos/` link without asking;
+//     so the host reads oikos through the `oikos/` link without asking; for Qwen, `oikos` in
+//     `context.includeDirectories` of .qwen/settings.json does the same;
 // - in the core repository, only its own hooks (`$CLAUDE_PROJECT_DIR/tools/hooks/…`): it is where
 //   oikos is developed, not used, so it gets no skill pointers and no MCP servers.
 // Sync owns only its entries: another tool's hooks, skills and MCP servers (akmon's, the person's)
@@ -20,7 +21,8 @@
 // `--check` changes nothing and exits 1 on any problem or drift.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { availableParallelism } from 'node:os';
 import { CORE_ROOT } from '../common/env.mjs';
 import { installRoot } from '../common/paths.mjs';
 import { loadLandscape } from '../common/landscape.mjs';
@@ -122,7 +124,19 @@ for (const host of hostNames) {
     if (check && existsSync(path) && w !== h) problems.push(`${label}: ${key} wires ${h}, tools/hooks/wiring.mjs says ${w} — sync`);
   }
   const base = existsSync(path) ? current : HOSTS[host].seed;
-  write(path, json({ ...base, hooks: mergeHooks(current.hooks || {}, hooks) }), settingsFile(host));
+  const settings = { ...base, hooks: mergeHooks(current.hooks || {}, hooks) };
+  write(path, json(INSTALL && host === 'qwen' ? withOikosIncluded(settings) : settings), settingsFile(host));
+}
+
+/**
+ * Qwen settings with `oikos` in `context.includeDirectories`: Qwen refuses every read through the
+ * `oikos/` link otherwise. Relative, so it resolves against the start folder and Qwen follows the
+ * link itself — Qwen's counterpart of Claude's `additionalDirectories` below. Other entries stay.
+ */
+function withOikosIncluded(settings) {
+  const dirs = settings.context?.includeDirectories || [];
+  if (dirs.includes('oikos')) return settings;
+  return { ...settings, context: { ...settings.context, includeDirectories: [...dirs, 'oikos'] } };
 }
 
 if (INSTALL) {
@@ -138,7 +152,8 @@ if (INSTALL) {
   }
 
   // -- MCP servers ------------------------------------------------------------------------
-  // Every host reads .mcp.json. oikos brings the browser's DevTools server; the installation adds
+  // Every host reads .mcp.json — Qwen Code only once its servers are approved for this folder
+  // (`qwen mcp approve --all`, again after an entry here changes; BOOTSTRAP.md). oikos brings the browser's DevTools server; the installation adds
   // its own (a knowledge base, …), and one of the same name replaces oikos's. The names oikos
   // wrote are kept in .local/sync.json, so a server it no longer wants goes and a server someone
   // else added stays.
@@ -194,13 +209,49 @@ if (existsSync(extDir)) {
 
 // -- write guard list ---------------------------------------------------------------------
 // tools/hooks/writes.mjs must name exactly the commands that take --dry-run, read from each
-// tool's own --help, so a new write command cannot slip past the write guard.
-for (const [tool, listed] of Object.entries(WRITES)) {
-  const cli = join(CORE_ROOT, 'tools', tool, 'cli.mjs');
-  const helpOf = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' }).stdout || '';
-  const commands = [...helpOf('--help').matchAll(/^ {2}([a-z][a-z-]*)\s/gm)].map((m) => m[1]);
-  if (!commands.length) { problems.push(`tools/${tool}: --help listed no commands`); continue; }
-  const writes = commands.filter((c) => /^ {2}--dry-run$/m.test(helpOf(c, '--help')));
+// tool's own --help, so a new write command cannot slip past the write guard. Every tool built on
+// runCli is asked, listed or not, so a new tool with a write command fails here until it has an
+// entry. A tool is a tools/<name>/cli.mjs that imports runCli from common/cli.mjs; the others
+// (sync itself, which would run a sync instead of printing help) are not run.
+const toolsDir = join(CORE_ROOT, 'tools');
+const runCliTools = readdirSync(toolsDir, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && existsSync(join(toolsDir, d.name, 'cli.mjs')))
+  .map((d) => d.name)
+  .filter((tool) => /^import\s*\{[^}]*\brunCli\b[^}]*\}\s*from\s*'\.\.\/common\/cli\.mjs'/m.test(readFileSync(join(toolsDir, tool, 'cli.mjs'), 'utf8')));
+for (const tool of Object.keys(WRITES)) {
+  if (!existsSync(join(toolsDir, tool, 'cli.mjs'))) problems.push(`tools/hooks/writes.mjs: ${tool} has no tools/${tool}/cli.mjs`);
+}
+// One --help per command; run one at a time they were most of the check's time, so they run one
+// at once per core and are judged afterwards, in order.
+const helpOf = (cli, ...args) => new Promise((done) => {
+  const child = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk; });
+  child.on('error', () => done(''));
+  child.on('close', () => done(out));
+});
+/** The results of `jobs` (functions returning a promise), at most `limit` running at a time. */
+async function inParallel(jobs, limit) {
+  const results = [];
+  let next = 0;
+  const worker = async () => { while (next < jobs.length) { const i = next++; results[i] = await jobs[i](); } };
+  await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, worker));
+  return results;
+}
+const cliOf = (tool) => join(toolsDir, tool, 'cli.mjs');
+const toolHelp = await inParallel(runCliTools.map((tool) => () => helpOf(cliOf(tool), '--help')), availableParallelism());
+const commandsOf = runCliTools.map((_, i) => [...toolHelp[i].matchAll(/^ {2}([a-z][a-z-]*)\s/gm)].map((m) => m[1]));
+const calls = runCliTools.flatMap((tool, i) => commandsOf[i].map((c) => ({ tool, c })));
+const commandHelp = await inParallel(calls.map(({ tool, c }) => () => helpOf(cliOf(tool), c, '--help')), availableParallelism());
+const dryRunCommands = (tool) => calls.filter((call, i) => call.tool === tool && /^ {2}--dry-run$/m.test(commandHelp[i])).map((call) => call.c);
+for (const [i, tool] of runCliTools.entries()) {
+  if (!commandsOf[i].length) { problems.push(`tools/${tool}: --help listed no commands`); continue; }
+  const writes = dryRunCommands(tool);
+  const listed = WRITES[tool];
+  if (!listed) {
+    for (const c of writes) problems.push(`tools/hooks/writes.mjs: ${tool} ${c} takes --dry-run but ${tool} has no entry`);
+    continue;
+  }
   for (const c of writes) if (!listed.includes(c)) problems.push(`tools/hooks/writes.mjs: ${tool} ${c} takes --dry-run but is not guarded`);
   for (const c of listed) if (!writes.includes(c)) problems.push(`tools/hooks/writes.mjs: ${tool} ${c} is not a --dry-run command`);
 }

@@ -15,10 +15,19 @@ automated behind the user's back; they see every step and can take over at any m
 
 ## Pieces
 
-- `node oikos/tools/browser/cli.mjs start [--url URL]` — starts Chrome with the oikos profile and a
-  DevTools port (9222). The profile lives in `.local/browser/chrome-profile` (git-ignored), so
-  sign-ins and cookies survive between launches.
+- `node oikos/tools/browser/cli.mjs start [--url URL]` — starts Chrome with the oikos profile and the
+  installation's DevTools port (`OIKOS_CHROME_PORT` in `oikos.yaml`, else one derived from its
+  folder). The profile lives in `.local/browser/chrome-profile` (git-ignored), so sign-ins and
+  cookies survive between launches.
 - `node oikos/tools/browser/cli.mjs status` — is it running, which proxy it uses, which tabs are open.
+- **Whose browser.** One Chrome per installation, told by the installation's code — its folder
+  name, which the profile path carries (`<code>/.local/browser/chrome-profile`). `start`,
+  `status` and `stop` name it, and act only on a Chrome whose process runs with this
+  installation's profile; the MCP server makes the same check before it attaches and does not
+  start for another installation's Chrome (another organization's sign-ins) or a Chrome oikos did
+  not start. Its refusal names this installation, the port and whose Chrome answered: close that
+  Chrome or give this installation a free `OIKOS_CHROME_PORT`, `start`, then reconnect the server
+  (`/mcp`) or restart the session.
 - **Which Chrome**: the Chrome or Chromium the user has (under WSL also the Windows one). Only
   when none is found, ask the user: they install it themselves, or
   `node oikos/tools/browser/cli.mjs install` shows the plan for Chrome for Testing inside the project
@@ -79,5 +88,7 @@ calendar go through the skill `workspace`, which uses this browser as one of its
   The first start is a fresh browser; sign in once, it stays.
 - `OIKOS_CHROME_PATH`, `OIKOS_CHROME_PROFILE`, `OIKOS_CHROME_PORT` override the defaults (`.local/.env`, or the shell as a fallback).
 - MCP server not in `/mcp` → restart the session after `start`; check Node.js (`npx`) exists on
-  the side where Chrome runs.
+  the side where Chrome runs. If it failed with "chrome-devtools MCP server not started: the Chrome
+  on 127.0.0.1:<port> is …", the port answers with someone else's Chrome — tell the user what it
+  names and follow its fix; never point the server at that Chrome another way.
 - The DevTools port is local to the machine; never expose it on a network interface.

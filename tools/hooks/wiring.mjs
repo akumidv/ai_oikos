@@ -32,14 +32,16 @@ export const WIRING = [
 ];
 
 // `seed`: the host's own keys a settings file starts with when `sync` creates it; afterwards they
-// are the host's and the person's, never rewritten.
+// are the host's and the person's, never rewritten. Both hosts pre-allow the browser's read-only
+// DevTools tools, each per tool (`mcp__<server>__<tool>`), never the whole server, which also writes.
 const CHROME_READS = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'];
+const CHROME_READ_RULES = CHROME_READS.map((t) => `mcp__chrome-devtools__${t}`);
 
 export const HOSTS = {
   claude: {
     dir: '.claude',
     var: 'CLAUDE_PROJECT_DIR',
-    seed: { enableAllProjectMcpServers: true, permissions: { allow: CHROME_READS.map((t) => `mcp__chrome-devtools__${t}`) } },
+    seed: { enableAllProjectMcpServers: true, permissions: { allow: CHROME_READ_RULES } },
     matchers: {
       session: null,
       shell: 'Bash',
@@ -50,7 +52,7 @@ export const HOSTS = {
   qwen: {
     dir: '.qwen',
     var: 'QWEN_PROJECT_DIR',
-    seed: {},
+    seed: { permissions: { allow: CHROME_READ_RULES } },
     matchers: {
       session: 'startup|resume|clear|compact',
       shell: '^run_shell_command$',

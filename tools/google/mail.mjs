@@ -1,14 +1,15 @@
 // Gmail over IMAP with a Google app password, the way a desktop mail client reads it: no
 // Google Cloud project. The password is GMAIL_APP_PASSWORD (environment or the local env file,
 // typed by the user with `node oikos/tools/setup/cli.mjs token GMAIL_APP_PASSWORD`); the account is
-// GMAIL_USER, else JIRA_EMAIL, else the git email — always a corporate one. Read-only: "All
+// GMAIL_USER, else JIRA_EMAIL, else the git email when it is in the organization's email domain —
+// always a corporate one. Read-only: "All
 // Mail" is opened with EXAMINE, bodies are fetched with BODY.PEEK, so nothing is even marked
 // read. Search takes the Gmail search box's operators (X-GM-RAW); ids are Gmail's own message
 // and thread ids (X-GM-MSGID, X-GM-THRID), the same ones the web interface uses.
 // imapflow and mailparser are tools/google's own dependencies, installed on first use.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { UsageError } from '../common/cli.mjs';
-import { envValue, orgEmail, orgEmailLabel, gitUserEmail } from '../common/env.mjs';
+import { envValue, orgEmail, orgEmailLabel, orgGitEmail } from '../common/env.mjs';
 import { toolDependenciesInstalled } from '../common/programs.mjs';
 import { htmlToText, safeName, freeName } from './api.mjs';
 
@@ -16,7 +17,10 @@ const HOST = 'imap.gmail.com';
 const PORT = 993;
 
 export const mailConfigured = () => Boolean(envValue('GMAIL_APP_PASSWORD'));
-export const mailAccount = () => orgEmail(envValue('GMAIL_USER') || envValue('JIRA_EMAIL') || gitUserEmail() || '');
+export const mailAccount = () => {
+  const named = envValue('GMAIL_USER') || envValue('JIRA_EMAIL');
+  return named ? orgEmail(named) : orgGitEmail();
+};
 
 export const MAIL_DEPENDENCIES = 'imapflow + mailparser (~15 MB) into tools/google/node_modules';
 

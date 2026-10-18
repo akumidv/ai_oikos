@@ -60,8 +60,11 @@ loads the one a request matches.
 A skill drives **connectors** — `skills/<name>/connectors/<connector>.md`, each with its tool
 (`tools/<connector>/cli.mjs`). Which connectors this installation uses for a skill, the first
 being the default, is `connectors:` in the installation's `oikos.yaml`; the user's words (a named
-service, a pasted URL) pick another. `node oikos/tools/landscape/cli.mjs skills` shows every skill
-with its connectors and the ones used here (`skills <name>` for one).
+service, a pasted URL) pick another of them. A skill left out there, or with an empty list, uses
+no connector. A connector's tool runs only in an installation that lists it there — elsewhere it
+stops before any credential, so a token exported in the shell never works for an organization that
+does not use the connector, and only a listed connector's token is asked for. `node oikos/tools/landscape/cli.mjs skills`
+shows every skill with its connectors and the ones used here (`skills <name>` for one).
 
 **Running the tools.** Every tool runs as `node oikos/tools/<tool>/cli.mjs …` from the
 installation's root: a tool finds the installation from where it runs (or from `OIKOS_HOME`), never
@@ -95,12 +98,12 @@ person whose credentials the session uses — normally the user in front of you:
 | Connector | "Me" is | How to check |
 |---|---|---|
 | jira, confluence | the account of `JIRA_EMAIL` (`currentUser()` in JQL/CQL) | `node oikos/tools/jira/cli.mjs whoami` |
-| gitlab | the owner of `GITLAB_TOKEN` | `node oikos/tools/gitlab/cli.mjs whoami` |
-| github | the owner of `GITHUB_TOKEN` / the `gh` login | `node oikos/tools/github/cli.mjs whoami` |
+| gitlab, gitlab-issues, gitlab-wiki | the owner of `GITLAB_TOKEN` | `node oikos/tools/<connector>/cli.mjs whoami` |
+| github, github-issues, github-wiki | the owner of `GITHUB_TOKEN` / the `gh` login | `node oikos/tools/<connector>/cli.mjs whoami` |
 | google | the account of the route in use: mail over IMAP, the shared browser, the Drive app or the connector | `node oikos/tools/google/cli.mjs whoami` (mail); skill `workspace` |
 | slack, other claude.ai connectors | the account that connected the connector in claude.ai | the connector's own profile |
 
-For a colleague, pass their work email (`--user`, `--owner`, `--assignee`). If the identities
+For a colleague, pass their work email — on GitHub and GitLab their login — (`--user`, `--owner`, `--assignee`). If the identities
 disagree (a connector signed in as someone else), say so before answering.
 
 ### Credentials and settings
@@ -112,8 +115,10 @@ fallback, since every installation on the machine shares it. Keys: `JIRA_EMAIL`,
 that are not secret — `JIRA_BASE_URL`, `GITLAB_URL`, `GITHUB_ORG`, … — are `settings:` in
 the installation's `oikos.yaml`. Connectors need no token: connect them in claude.ai → Settings →
 Connectors with the work account. The user types a token in their own terminal with
-`node oikos/tools/setup/cli.mjs token` (no echo, straight into `.local/.env`); each tool's
-`whoami` shows which are set and where from. Never print a secret, never ask for one in the chat, never put one into
+`node oikos/tools/setup/cli.mjs token` (no echo, straight into `.local/.env`; with no key named it
+asks for each one not yet there — missing, or only in the shell environment or `oikos.yaml`); each
+tool's `whoami` shows which are set and where from. A command whose credentials or site settings
+are missing stops with exit 1 and names the missing keys — it never falls back to a dry run. Never print a secret, never ask for one in the chat, never put one into
 a document; a hook denies reading `.env` files and printing the environment.
 
 **Git.** Stage by name (`git add -A` and `git commit -a` are denied by a hook); `git push`, a

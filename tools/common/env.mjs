@@ -95,6 +95,15 @@ export function gitUserEmail() {
   }
 }
 
+/**
+ * The git email as a default for the user's work address: only when the organization's email
+ * domain is configured and the address is in it, else null. Without a domain the machine's git
+ * email may be another organization's address, so it is never taken (the rule `setup init` follows).
+ */
+export function orgGitEmail() {
+  return emailDomain() ? orgEmail(gitUserEmail()) : null;
+}
+
 /** One line per credential: present / defaulted / missing, never the value itself. */
 export function credentialsHelp(names, { extra = [] } = {}) {
   const rows = names.map((name) => {

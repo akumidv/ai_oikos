@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli, required, printJson, nonLatinLetters, UsageError } from '../common/cli.mjs';
-import { atlassianCreds, credsComplete, atlassianHelp, atlassianClient } from '../common/atlassian.mjs';
+import { atlassianCreds, credsComplete, atlassianHelp, atlassianClient, missingCreds } from '../common/atlassian.mjs';
 import { adfToText, markdownToAdf, plainAdf } from '../common/adf.mjs';
 import { HttpError } from '../common/http.mjs';
 import { envValue } from '../common/env.mjs';
@@ -23,16 +23,21 @@ const isAgentStatus = (name) => AGENT_STATUSES.includes(String(name).trim().toLo
 const INFO_FIELDS = 'summary,description,status,assignee,reporter,issuetype,priority,parent,labels,components,issuelinks,attachment,comment,subtasks,duedate';
 const LIST_FIELDS = 'summary,status,issuetype,assignee,priority';
 
-function client() {
+/**
+ * The credentials and the client for a command that would `what`. Missing credentials are a usage
+ * error naming each missing key, raised before any request; only an explicit --dry-run whose
+ * preview reads nothing from Jira (`offline`) goes on, with a null client.
+ */
+function client(what, { offline = false } = {}) {
   const c = atlassianCreds();
-  if (!credsComplete(c)) return { c, jira: null };
-  return { c, jira: atlassianClient(c, 'jira') };
+  if (credsComplete(c)) return { c, jira: atlassianClient(c, 'jira') };
+  if (offline) return { c, jira: null };
+  throw missingCreds(c, 'Jira', what);
 }
 
-function needCreds(c, what) {
-  console.log(`(no Jira credentials — cannot ${what})\n`);
-  console.log(atlassianHelp(c));
-  return 0;
+/** The closing note of a dry run made without credentials: the write itself will need them. */
+function offlineNote(c) {
+  console.log(`\n(no Jira credentials — the write itself needs them)\n${atlassianHelp(c)}`);
 }
 
 const name = (o, fallback = '') => (o && (o.displayName || o.name)) || fallback;
@@ -148,8 +153,7 @@ const commands = {
     help: 'check the credentials: which Atlassian account the tool acts as',
     options: {},
     async run(v) {
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'check the account');
+      const { c, jira } = client('check the account');
       const me = await jira.get('/rest/api/3/myself');
       if (v.json) return printJson(me);
       console.log(`${me.displayName} <${me.emailAddress || c.email}> on ${c.baseUrl}`);
@@ -162,8 +166,7 @@ const commands = {
     options: { task: { type: 'string' } },
     async run(v) {
       required(v, 'task');
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, `read ${v.task}`);
+      const { c, jira } = client(`read ${v.task}`);
       const d = await fetchIssue(jira, v.task, INFO_FIELDS);
       if (v.json) return printJson(d);
       console.log(infoLines(d).join('\n'));
@@ -177,8 +180,7 @@ const commands = {
     async run(v) {
       required(v, 'task');
       const limit = Number(v.limit || 20);
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, `read ${v.task}`);
+      const { c, jira } = client(`read ${v.task}`);
       const ids = await fieldIdsByName(jira, ['Sprint']);
       const fields = INFO_FIELDS + (ids.Sprint ? `,${ids.Sprint}` : '');
       const d = await fetchIssue(jira, v.task, fields);
@@ -218,8 +220,7 @@ const commands = {
     options: { jql: { type: 'string' }, limit: { type: 'string' }, fields: { type: 'string' } },
     async run(v) {
       required(v, 'jql');
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'search');
+      const { jira } = client('search');
       const { issues, truncated } = await jqlSearch(jira, v.jql, Number(v.limit || 50), v.fields || LIST_FIELDS);
       if (v.json) return printJson(issues);
       for (const i of issues) console.log(issueLine(i));
@@ -231,8 +232,7 @@ const commands = {
     help: 'agile boards (--project KEY, --name substring)',
     options: { project: { type: 'string' }, name: { type: 'string' }, limit: { type: 'string' } },
     async run(v) {
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'list boards');
+      const { jira } = client('list boards');
       const q = new URLSearchParams();
       if (v.project) q.set('projectKeyOrId', v.project);
       if (v.name) q.set('name', v.name);
@@ -248,8 +248,7 @@ const commands = {
     options: { board: { type: 'string' }, state: { type: 'string' }, limit: { type: 'string' } },
     async run(v) {
       required(v, 'board');
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'list sprints');
+      const { jira } = client('list sprints');
       const state = v.state || 'active,future';
       const sprints = await agilePaged(jira, `/rest/agile/1.0/board/${v.board}/sprint?state=${state}`, 'values', Number(v.limit || 50));
       if (v.json) return printJson(sprints);
@@ -266,8 +265,7 @@ const commands = {
     options: { id: { type: 'string' }, board: { type: 'string' }, limit: { type: 'string' } },
     async run(v) {
       if (!v.id && !v.board) throw new UsageError('--id or --board is required');
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'read the sprint');
+      const { jira } = client('read the sprint');
       let sprint;
       if (v.id) sprint = await jira.get(`/rest/agile/1.0/sprint/${v.id}`);
       else {
@@ -315,9 +313,9 @@ const commands = {
       required(v, 'task');
       const text = readText(v);
       if (!text) throw new UsageError('--text or --file is required');
-      const { c, jira } = client();
-      const forced = !jira;
-      const dry = v['dry-run'] || forced;
+      const dry = Boolean(v['dry-run']);
+      // The preview of a comment reads nothing from Jira, so an explicit --dry-run works without credentials.
+      const { c, jira } = client(`comment on ${v.task}`, { offline: dry });
       const foreign = nonLatinLetters(text);
       if (foreign && !dry && !v['allow-non-english']) {
         throw new UsageError(`refusing to post: Jira comments are English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
@@ -325,12 +323,12 @@ const commands = {
       const doc = v.plain ? plainAdf(text) : markdownToAdf(text);
       if (dry) {
         if (foreign) console.log(`WARNING: non-Latin letters (${foreign}) — Jira comments are English.`);
-        console.log(`--- DRY RUN (${forced ? 'no Jira credentials' : 'requested --dry-run'}) ---`);
+        console.log('--- DRY RUN (requested --dry-run) ---');
         console.log(`Task:   ${v.task}\nTarget: ${c.baseUrl || '<JIRA_BASE_URL>'}/browse/${v.task}\nComment that WOULD be posted:`);
         console.log(`${'-'.repeat(40)}\n${text}\n${'-'.repeat(40)}`);
         if (v['show-adf']) console.log(JSON.stringify(doc, null, 2));
         console.log('DRY RUN — nothing written to Jira.');
-        if (forced) console.log(`\n${atlassianHelp(c)}`);
+        if (!jira) offlineNote(c);
         return 0;
       }
       const r = await jira.post(`/rest/api/3/issue/${encodeURIComponent(v.task)}/comment`, { body: doc });
@@ -343,17 +341,14 @@ const commands = {
     options: { task: { type: 'string' }, to: { type: 'string' }, 'dry-run': { type: 'boolean' } },
     async run(v) {
       required(v, 'task', 'to');
-      const { c, jira } = client();
+      const c = atlassianCreds();
       const refuse = () => {
-        console.error(`refused: an agent moves a task only among ${AGENT_STATUSES.join(', ')} — move ${v.task} to '${v.to}' yourself: ${c.baseUrl}/browse/${v.task}`);
+        console.error(`refused: an agent moves a task only among ${AGENT_STATUSES.join(', ')} — move ${v.task} to '${v.to}' yourself: ${c.baseUrl || '<JIRA_BASE_URL>'}/browse/${v.task}`);
         return 3;
       };
       if (!isAgentStatus(v.to)) return refuse();
-      if (!jira) {
-        console.log(`DRY RUN (no Jira credentials) — would move ${v.task}: ? → ${v.to}\n`);
-        console.log(atlassianHelp(c));
-        return 0;
-      }
+      // Even the dry run reads the current status and the transitions open from it.
+      const { jira } = client(`move ${v.task}`);
       const d = await fetchIssue(jira, v.task, 'status');
       const current = name(d.fields.status);
       if (!isAgentStatus(current)) return refuse();
@@ -377,8 +372,7 @@ const commands = {
     options: { task: { type: 'string' }, id: { type: 'string' }, dir: { type: 'string' } },
     async run(v) {
       required(v, 'task', 'id');
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'download');
+      const { jira } = client('download');
       const d = await fetchIssue(jira, v.task, 'attachment');
       const att = (d.fields.attachment || []).find((a) => String(a.id) === String(v.id));
       if (!att) throw new UsageError(`${v.task} has no attachment ${v.id}. Ids: ${(d.fields.attachment || []).map((a) => a.id).join(', ') || 'none'}`);
@@ -447,9 +441,10 @@ function goalLine(g) {
 }
 
 // == writes beyond comment/transition: create, edit (one or bulk), sprint moves, links ==
-// Every one prints what it would do under --dry-run and is forced into dry-run without
-// credentials. Bulk selection by JQL is capped (--max, default 50) so a wide query never
-// edits more than the user saw.
+// Every one prints what it would do under --dry-run, and needs credentials even then: the
+// preview resolves users, goals, sprints and JQL on the site (only `link` previews offline).
+// Bulk selection by JQL is capped (--max, default 50) so a wide query never edits more than
+// the user saw.
 
 const DEFAULT_MAX = 50;
 
@@ -478,7 +473,6 @@ function englishOnly(v, ...texts) {
 async function selectKeys(jira, v) {
   if (v.task) return splitList(v.task);
   if (!v.jql) throw new UsageError('--task KEY[,KEY…] or --jql is required');
-  if (!jira) throw new UsageError('selecting by --jql needs Jira credentials');
   const max = Number(v.max || DEFAULT_MAX);
   const { issues, truncated } = await jqlSearch(jira, v.jql, max + 1);
   if (issues.length > max || truncated) throw new UsageError(`the JQL selects more than --max ${max} issues; narrow it or raise --max`);
@@ -495,17 +489,13 @@ async function fieldsFrom(jira, v) {
   if (v.parent) f.parent = { key: v.parent };
   if (v.due) f.duedate = v.due === 'none' ? null : v.due;
   if (v.labels !== undefined) f.labels = splitList(v.labels);
-  if (v.assignee) f.assignee = jira ? { accountId: await accountId(jira, v.assignee) } : { accountId: `<${v.assignee}>` };
+  if (v.assignee) f.assignee = { accountId: await accountId(jira, v.assignee) };
   if (v.assignee === 'none') f.assignee = null;
   if (v.goals !== undefined) {
-    const goalKeys = splitList(v.goals);
-    if (!jira) f.Goals = goalKeys;
-    else {
-      const ids = await fieldIdsByName(jira, ['Goals']);
-      if (!ids.Goals) throw new UsageError('this Jira site has no Goals field');
-      f[ids.Goals] = [];
-      for (const k of goalKeys) f[ids.Goals].push({ id: (await goalByKey(jira, k)).id });
-    }
+    const ids = await fieldIdsByName(jira, ['Goals']);
+    if (!ids.Goals) throw new UsageError('this Jira site has no Goals field');
+    f[ids.Goals] = [];
+    for (const k of splitList(v.goals)) f[ids.Goals].push({ id: (await goalByKey(jira, k)).id });
   }
   englishOnly(v, v.summary, description);
   return f;
@@ -518,8 +508,8 @@ const COMMON_FIELDS = {
   'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' },
 };
 
-function dryHeader(forced) {
-  console.log(`--- DRY RUN (${forced ? 'no Jira credentials' : 'requested --dry-run'}) ---`);
+function dryHeader() {
+  console.log('--- DRY RUN (requested --dry-run) ---');
 }
 
 function showFields(fields) {
@@ -535,15 +525,14 @@ Object.assign(commands, {
     options: { project: { type: 'string' }, type: { type: 'string' }, sprint: { type: 'string' }, ...COMMON_FIELDS },
     async run(v) {
       required(v, 'project', 'summary');
-      const { c, jira } = client();
+      const { c, jira } = client(`create an issue in ${v.project}`);
       const fields = { project: { key: v.project }, issuetype: { name: v.type || 'Task' }, ...(await fieldsFrom(jira, v)) };
-      if (v['dry-run'] || !jira) {
-        dryHeader(!jira);
+      if (v['dry-run']) {
+        dryHeader();
         console.log(`Would create in ${v.project}:`);
         showFields(fields);
         if (v.sprint) console.log(`  then add to sprint ${v.sprint}`);
         console.log('DRY RUN — nothing written to Jira.');
-        if (!jira) console.log(`\n${atlassianHelp(c)}`);
         return 0;
       }
       const { data } = await jira.post('/rest/api/3/issue', { fields });
@@ -556,20 +545,19 @@ Object.assign(commands, {
     help: 'edit fields of one issue or many (--task A,B | --jql … --max N; --summary, --description|--file, --assignee, --labels (set), --add-labels, --remove-labels, --priority, --parent, --due, --goals GOAL-1,… (set; "" clears), --dry-run)',
     options: { task: { type: 'string' }, jql: { type: 'string' }, max: { type: 'string' }, 'add-labels': { type: 'string' }, 'remove-labels': { type: 'string' }, ...COMMON_FIELDS },
     async run(v) {
-      const { c, jira } = client();
+      const { jira } = client('edit issues');
       const keys = await selectKeys(jira, v);
       const fields = await fieldsFrom(jira, v);
       const update = {};
       const labelOps = [...splitList(v['add-labels']).map((l) => ({ add: l })), ...splitList(v['remove-labels']).map((l) => ({ remove: l }))];
       if (labelOps.length) update.labels = labelOps;
       if (!Object.keys(fields).length && !labelOps.length) throw new UsageError('nothing to change: pass at least one field option');
-      if (v['dry-run'] || !jira) {
-        dryHeader(!jira);
+      if (v['dry-run']) {
+        dryHeader();
         console.log(`Would edit ${keys.length} issue(s): ${keys.join(', ')}`);
         showFields(fields);
         if (labelOps.length) console.log(`  labels: ${labelOps.map((o) => (o.add ? `+${o.add}` : `-${o.remove}`)).join(' ')}`);
         console.log('DRY RUN — nothing written to Jira.');
-        if (!jira) console.log(`\n${atlassianHelp(c)}`);
         return 0;
       }
       let failed = 0;
@@ -592,19 +580,18 @@ Object.assign(commands, {
     options: { sprint: { type: 'string' }, backlog: { type: 'boolean' }, task: { type: 'string' }, jql: { type: 'string' }, max: { type: 'string' }, 'dry-run': { type: 'boolean' } },
     async run(v) {
       if (!v.sprint && !v.backlog) throw new UsageError('--sprint ID or --backlog is required');
-      const { c, jira } = client();
+      const { jira } = client('move issues');
       const keys = await selectKeys(jira, v);
       let target = v.backlog ? 'the backlog' : `sprint ${v.sprint}`;
-      if (jira && v.sprint) {
+      if (v.sprint) {
         const s = await jira.get(`/rest/agile/1.0/sprint/${v.sprint}`);
         if (s.state === 'closed') throw new UsageError(`sprint ${s.name} is closed; issues cannot be moved into it`);
         target = `sprint ${s.id} "${s.name}" [${s.state}]`;
       }
-      if (v['dry-run'] || !jira) {
-        dryHeader(!jira);
+      if (v['dry-run']) {
+        dryHeader();
         console.log(`Would move ${keys.length} issue(s) to ${target}: ${keys.join(', ')}`);
         console.log('DRY RUN — nothing written to Jira.');
-        if (!jira) console.log(`\n${atlassianHelp(c)}`);
         return 0;
       }
       for (let i = 0; i < keys.length; i += 50) {
@@ -620,18 +607,20 @@ Object.assign(commands, {
     help: 'link two issues: --from A --type Blocks --to B means "A blocks B" (--dry-run); --types lists link types',
     options: { from: { type: 'string' }, to: { type: 'string' }, type: { type: 'string' }, types: { type: 'boolean' }, 'dry-run': { type: 'boolean' } },
     async run(v) {
-      const { c, jira } = client();
       if (v.types) {
-        if (!jira) return needCreds(c, 'list link types');
+        const { jira } = client('list link types');
         const { issueLinkTypes = [] } = await jira.get('/rest/api/3/issueLinkType');
         for (const t of issueLinkTypes) console.log(`${t.name.padEnd(16)} A ${t.outward} B  /  B ${t.inward} A`);
         return 0;
       }
       required(v, 'from', 'to', 'type');
       const body = { type: { name: v.type }, outwardIssue: { key: v.from }, inwardIssue: { key: v.to } };
-      if (v['dry-run'] || !jira) {
-        dryHeader(!jira);
+      // The preview of a link reads nothing from Jira, so an explicit --dry-run works without credentials.
+      const { c, jira } = client(`link ${v.from} to ${v.to}`, { offline: v['dry-run'] });
+      if (v['dry-run']) {
+        dryHeader();
         console.log(`Would link: ${v.from} —${v.type}→ ${v.to}\nDRY RUN — nothing written to Jira.`);
+        if (!jira) offlineNote(c);
         return 0;
       }
       await jira.post('/rest/api/3/issueLink', body);
@@ -643,8 +632,7 @@ Object.assign(commands, {
     help: 'goals (OKRs): of a task (--task), or the list (--tag q3-26|current|next|previous, --owner me|email, --search text, --state on_track|at_risk|off_track|pending|done|…, --archived, --limit); --tags lists the tags',
     options: { task: { type: 'string' }, owner: { type: 'string' }, tag: { type: 'string' }, tags: { type: 'boolean' }, search: { type: 'string' }, state: { type: 'string' }, archived: { type: 'boolean' }, limit: { type: 'string' } },
     async run(v) {
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'read goals');
+      const { jira } = client('read goals');
       if (v.tags) {
         const counts = new Map();
         for (const g of await allGoals(jira)) for (const t of goalTags(g)) counts.set(t, (counts.get(t) || 0) + 1);
@@ -697,8 +685,7 @@ Object.assign(commands, {
     options: { key: { type: 'string' }, limit: { type: 'string' }, comments: { type: 'string' } },
     async run(v) {
       required(v, 'key');
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'read goals');
+      const { jira } = client('read goals');
       const goal = await goalByKey(jira, v.key, `subGoals{ edges{ node{ key name isArchived state{label value} } } } comments(first:${Number(v.comments || 10)}){ edges{ node{ commentText creationDate creator{ name } } } }`);
       const { issues, truncated } = await jqlSearch(jira, `Goals = ${goal.key} ORDER BY status, key`, Number(v.limit || 100));
       if (v.json) return printJson({ goal, issues });
@@ -726,8 +713,7 @@ Object.assign(commands, {
     help: "what is assigned to a person — open issues and this quarter's goals they own (--user me|email, default me; --tag current|q3-26; --all to include done issues)",
     options: { user: { type: 'string' }, tag: { type: 'string' }, all: { type: 'boolean' }, limit: { type: 'string' } },
     async run(v) {
-      const { c, jira } = client();
-      if (!jira) return needCreds(c, 'read assignments');
+      const { jira } = client('read assignments');
       // "me" is the account of the API token — the person in JIRA_EMAIL.
       const who = v.user || 'me';
       const id = await accountId(jira, who);
@@ -765,13 +751,12 @@ Object.assign(commands, {
       const text = readText(v);
       if (!text) throw new UsageError('--text or --file is required');
       englishOnly(v, text);
-      const { c, jira } = client();
-      const goal = jira ? await goalByKey(jira, v.key) : null;
-      if (v['dry-run'] || !jira) {
-        dryHeader(!jira);
-        console.log(`Goal: ${goal ? goalLine(goal) : v.key}\nComment that WOULD be added:\n${'-'.repeat(40)}\n${text}\n${'-'.repeat(40)}`);
+      const { jira } = client(`comment on goal ${v.key}`);
+      const goal = await goalByKey(jira, v.key);
+      if (v['dry-run']) {
+        dryHeader();
+        console.log(`Goal: ${goalLine(goal)}\nComment that WOULD be added:\n${'-'.repeat(40)}\n${text}\n${'-'.repeat(40)}`);
         console.log('DRY RUN — nothing written to Atlassian Home.');
-        if (!jira) console.log(`\n${atlassianHelp(c)}`);
         return 0;
       }
       const d = await graphql(jira, 'mutation OikosGoalComment($i:TownsquareGoalsCreateCommentInput!){ goals_createComment(input:$i){ success errors{ message } comment{ url } } }', {
@@ -784,4 +769,4 @@ Object.assign(commands, {
   },
 });
 
-runCli('jira', commands);
+runCli('jira', commands, { connector: 'jira' });

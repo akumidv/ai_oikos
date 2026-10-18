@@ -73,6 +73,21 @@ test('each installation reads its own configuration through the shared core', ()
   assert.deepEqual(resources.map((r) => r.resource), ['tracker']);
 });
 
+test('landscape shows as used only the connectors the installation lists', () => {
+  const used = (dir) => Object.fromEntries([...tool(dir, 'landscape', ['skills']).stdout.matchAll(/^(\S+) — [\s\S]*?used here: (.*)$/gm)].map((m) => [m[1], m[2]]));
+  // The fixture lists code-hosting, task-tracking and wiki; messaging and workspace are left out.
+  const acme = used(installation('acme'));
+  assert.equal(acme['code-hosting'], 'github (default github)');
+  assert.equal(acme.messaging, '—', 'a skill left out uses no connector');
+  assert.equal(acme.workspace, '—');
+  const json = JSON.parse(tool(installation('acme'), 'landscape', ['skills', 'messaging', '--json']).stdout)[0];
+  assert.deepEqual(json.configured, []);
+  // Nothing listed at all: no skill uses a connector.
+  const none = used(installation('none', (t) => t.replace(/^connectors:\n(?:\s+.*\n)+/m, 'connectors:\n')));
+  assert.ok(Object.keys(none).length >= 5, JSON.stringify(none));
+  for (const [skill, shown] of Object.entries(none)) assert.equal(shown, '—', skill);
+});
+
 test('a tool run outside any installation says so', () => {
   const r = spawnSync(process.execPath, [join(CORE, 'tools', 'catalog', 'cli.mjs'), 'summary'], { cwd: CORE, encoding: 'utf8', env: cleanEnv({ PWD: CORE }) });
   assert.equal(r.status, 1);
@@ -103,6 +118,9 @@ test('sync wires the installation into oikos/ and keeps what others wired', () =
   assert.ok(existsSync(join(dir, '.claude', 'skills', 'wiki', '..', '..', '..', 'oikos', 'skills', 'wiki', 'SKILL.md')), 'the pointer resolves');
   const qwen = readJson(join(dir, '.qwen', 'settings.json'));
   assert.ok(Object.values(qwen.hooks).flat().some((g) => g.hooks.some((h) => h.command.includes('$QWEN_PROJECT_DIR/oikos/tools/hooks/'))));
+  const reads = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'].map((t) => `mcp__chrome-devtools__${t}`);
+  assert.deepEqual(qwen.permissions.allow, reads, 'a new Qwen settings file pre-allows the read-only DevTools tools, each by name');
+  assert.deepEqual(qwen.context.includeDirectories, ['oikos'], 'Qwen may read through the oikos/ link');
   assert.deepEqual(readJson(join(dir, '.claude', 'settings.local.json')).permissions.additionalDirectories, [CORE]);
 
   let mcp = readJson(join(dir, '.mcp.json')).mcpServers;
@@ -115,6 +133,20 @@ test('sync wires the installation into oikos/ and keeps what others wired', () =
   assert.equal(tool(dir, 'sync', []).status, 0);
   mcp = readJson(join(dir, '.mcp.json')).mcpServers;
   assert.deepEqual(Object.keys(mcp).sort(), ['chrome-devtools', 'theirs']);
+});
+
+test('sync keeps the keys of an existing Qwen settings file and lets it read oikos/', () => {
+  const dir = installation();
+  mkdirSync(join(dir, '.qwen'));
+  writeFileSync(join(dir, '.qwen', 'settings.json'), JSON.stringify({ $version: 4, permissions: { allow: ['mcp__theirs__read'] }, context: { includeDirectories: ['../shared'], fileName: 'AGENTS.md' } }));
+  assert.equal(tool(dir, 'sync', []).status, 0);
+  const qwen = readJson(join(dir, '.qwen', 'settings.json'));
+  assert.equal(qwen.$version, 4);
+  assert.deepEqual(qwen.permissions.allow, ['mcp__theirs__read'], 'the seed is not rewritten into an existing file');
+  assert.deepEqual(qwen.context, { includeDirectories: ['../shared', 'oikos'], fileName: 'AGENTS.md' }, 'oikos is added, the rest kept');
+  assert.equal(tool(dir, 'sync', []).status, 0);
+  assert.deepEqual(readJson(join(dir, '.qwen', 'settings.json')).context.includeDirectories, ['../shared', 'oikos'], 'added once');
+  assert.ok(Object.values(qwen.hooks).flat().some((g) => g.hooks.some((h) => h.command.includes('$QWEN_PROJECT_DIR/oikos/tools/hooks/'))));
 });
 
 test('oikos/ is read-only in an installation, the installation itself is not', () => {
@@ -157,13 +189,27 @@ test('two installations never share a browser', async () => {
   }
 });
 
+/** A git configuration whose only user email is `email`, for `setup init` to default JIRA_EMAIL from. */
+function gitEmail(base, email) {
+  const file = join(base, 'gitconfig');
+  writeFileSync(file, `[user]\n\temail = ${email}\n`);
+  return { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1' };
+}
+
+/** `setup init <base>/fresh` with `args`, run from `base` with the git email `email`. */
+function init(base, args, email) {
+  const dir = join(base, 'fresh');
+  const r = spawnSync(process.execPath, [join(CORE, 'tools', 'setup', 'cli.mjs'), 'init', dir, ...args],
+    { cwd: base, encoding: 'utf8', env: cleanEnv({ PWD: base, ...gitEmail(base, email) }) });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  return dir;
+}
+
 test('setup init makes an installation and refuses the core', () => {
   const base = mkdtempSync(join(tmpdir(), 'oikos-test-'));
   made.push(base);
-  const dir = join(base, 'fresh');
-  const r = spawnSync(process.execPath, [join(CORE, 'tools', 'setup', 'cli.mjs'), 'init', dir, '--org', 'ACME Corp', '--email-domain', 'acme.example'],
-    { cwd: base, encoding: 'utf8', env: cleanEnv({ PWD: base }) });
-  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const dir = init(base, ['--org', 'ACME Corp', '--email-domain', 'acme.example'], 'ada@acme.example');
+  assert.match(readFileSync(join(dir, '.local', '.env'), 'utf8'), /^JIRA_EMAIL=ada@acme\.example$/m, 'the git email, inside the domain');
   for (const f of ['AGENTS.md', 'CLAUDE.md', 'oikos.yaml', 'LANDSCAPE.md', '.gitignore', 'resources', '.local/AGENTS.md', '.local/.env', '.mcp.json', '.claude/settings.json']) {
     assert.ok(existsSync(join(dir, f)), f);
   }
@@ -176,6 +222,13 @@ test('setup init makes an installation and refuses the core', () => {
   const core = spawnSync(process.execPath, [join(CORE, 'tools', 'setup', 'cli.mjs'), 'init', join(CORE, 'x')], { encoding: 'utf8', env: cleanEnv() });
   assert.equal(core.status, 1);
   assert.ok(!existsSync(join(CORE, 'x')));
+});
+
+test('setup init without an email domain writes no git email into the installation', () => {
+  const base = mkdtempSync(join(tmpdir(), 'oikos-test-'));
+  made.push(base);
+  const dir = init(base, ['--org', 'ACME Corp'], 'ada@other.example');
+  assert.doesNotMatch(readFileSync(join(dir, '.local', '.env'), 'utf8'), /JIRA_EMAIL/, "another organization's address stays out");
 });
 
 test('the leak check finds a private term staged in a repository', async () => {

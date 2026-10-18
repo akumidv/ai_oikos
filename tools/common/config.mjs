@@ -54,3 +54,6 @@ export function emailDomain() {
   const d = config().organization.email_domain;
   return d ? String(d).trim().replace(/^@/, '').toLowerCase() : null;
 }
+
+/** Every connector the installation lists under some skill in `connectors:`; empty when it lists none. */
+export const listedConnectors = () => new Set(Object.values(config().connectors).flat());

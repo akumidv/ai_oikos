@@ -47,10 +47,12 @@ in their language; everything written stays in English.
    `node <oikos>/tools/setup/cli.mjs init <folder> --org "<name>" --email-domain <domain> [--vault <path>]`.
    It links `oikos/` to the core, writes `AGENTS.md`, `CLAUDE.md`, `oikos.yaml`, `LANDSCAPE.md`,
    `resources/`, `.gitignore` and `.local/` (`AGENTS.md`, `.env` with `JIRA_EMAIL` taken from the
-   git email when it is in the organization's domain, else pass `--jira-email`), and runs sync,
+   git email only when it is in the organization's domain — without `--email-domain` there is no
+   default — else pass `--jira-email`), and runs sync,
    which writes the agent hosts' wiring there. It never overwrites an existing file. Then, with
    the user, from the installation's root:
-   - `oikos.yaml`: which connectors each skill uses here
+   - `oikos.yaml`: which connectors each skill uses here — a connector's tool runs, and its token
+     is asked for, only once it is listed; a skill left out uses none
      (`node oikos/tools/landscape/cli.mjs skills` lists them), the site settings (`JIRA_BASE_URL`,
      `GITLAB_URL`, `GITHUB_ORG`, …), the organization's MCP servers (a knowledge base). Then
      `node oikos/tools/sync/cli.mjs` writes `.mcp.json`.
@@ -69,10 +71,12 @@ in their language; everything written stays in English.
    ```bash
    cd <installation> && node oikos/tools/setup/cli.mjs token
    ```
-   It shows where to create each missing token the installation's connectors need, reads it
-   without echo, saves it into `.local/.env` (mode 600) and checks it with the tool's `whoami`.
+   It asks for each token the connectors listed in `oikos.yaml` need that is not yet in
+   `.local/.env` — missing, or only in the shell environment or `oikos.yaml`; with no connector
+   listed, none — shows where to create it, reads it without echo, saves it into `.local/.env`
+   (mode 600) and checks it with the tool's `whoami`.
    Tokens exported in the shell are only a fallback (every installation sees them); `.local/.env`
-   wins over them, and `status` flags a token taken from the shell. Never ask for a
+   wins over them, `status` flags a token taken from the shell, and `token` moves it here. Never ask for a
    token in the chat; if one is pasted there anyway, tell the user to revoke it and create a new one.
 5. **claude.ai connectors** (no tokens): for connectors that go through claude.ai (Slack; Gmail,
    Drive, Calendar as an optional route), the user connects them in claude.ai → Settings →
@@ -87,7 +91,11 @@ in their language; everything written stays in English.
    (`cd <installation> && claude`, or `qwen` — the two are wired alike, see DEVELOPMENT.md § Agent
    hosts): the instructions, hooks and MCP servers load only at session start from that folder.
    On the first start the agent asks once whether to trust the folder and to use its MCP servers —
-   accept, otherwise neither the guards nor the skills load. A good first request: "what are my tasks?".
+   accept, otherwise neither the guards nor the skills load. For Qwen, run `qwen mcp approve --all`
+   once from the installation's root, and again whenever sync changes an MCP server's entry in
+   `.mcp.json`: Qwen keeps the approval per folder and per server configuration, lists an
+   unapproved server as pending, and a headless run skips it without a word. A good first request:
+   "what are my tasks?".
 
 Another organization or project is another installation: step 3 again with another folder. The
 installations share the core and nothing else — each has its own configuration, tokens, catalog
@@ -103,7 +111,8 @@ git -C <oikos> pull --ff-only && npm --prefix <oikos> install
 ```
 
 Then, in each installation: `node oikos/tools/sync/cli.mjs && node oikos/tools/sync/cli.mjs --check`,
-and start a new session there (hooks and settings are read at start). An installation's own files
+and start a new session there (hooks and settings are read at start); for Qwen, approve the MCP
+servers again when sync reports `.mcp.json` changed (Set up, step 8). An installation's own files
 and `.local/` are untouched by an update; sync rewrites only oikos's own entries in the wiring.
 `setup status` shows whether an update added something to set up.
 

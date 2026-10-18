@@ -22,21 +22,19 @@ One core checkout serves several installations. An installation is a folder hold
 Phase 0 (scrub) is done: OIKOS.md split from AGENTS.md, brand profile (`brand:`),
 neutral extension icon and colours, private task ids and paths out of the docs, `auth: sso`.
 Phase 1 is in code (docs, `npm test`): the core is no installation any more — the tools
-run from an installation or with `OIKOS_HOME`. The core's own `.local/` and `CLAUDE.local.md` are
-left only for P3-3.
+run from an installation or with `OIKOS_HOME`.
 
 ## Phase 1 — installation model in code
 
 - P1-2 · sync writes the installation's wiring · active · Hooks, skill pointers, MCP point into `oikos/`
-  — hooks `$CLAUDE_PROJECT_DIR/oikos/tools/hooks/host-hook.mjs`; pointers
-  `../../../oikos/skills/<name>/SKILL.md`; `.mcp.json` absolute paths + `env: { OIKOS_HOME }`;
-  the core's real path in `permissions.additionalDirectories` of `.claude/settings.local.json`.
-  Written and tested; a live Claude Code session in an installation works (hooks, MCP servers,
-  tools). Left: the same in Qwen (it has no additionalDirectories yet).
+  — Claude: `additionalDirectories`; Qwen 0.24.7: `context.includeDirectories: ["oikos"]`, read-only
+  MCP tools pre-allowed, `qwen mcp approve --all` once per installation (BOOTSTRAP). Left: a live
+  Qwen session reading `oikos/` after the fix.
 - P1-4 · One browser per installation · active · Port from the installation; refuse a foreign Chrome
   — done: port = `OIKOS_CHROME_PORT` else derived from the folder; start/stop/status
-  check the process command line; checked live with a Windows Chrome under WSL. Left: the MCP
-  server still attaches to whatever answers on the port.
+  check the process command line; checked live with a Windows Chrome under WSL. The MCP server
+  runs the same check before `npx` and refuses another installation's or a foreign Chrome; answers
+  name the installation's code (its folder). Left: verify live (P3-1 rerun).
   — port in `oikos.yaml` settings; `start` checks that the Chrome on the port uses this
   installation's profile (`launch.json`, process command line), not any DevTools answer.
 
@@ -53,14 +51,6 @@ left only for P3-3.
 - P3-1 · First installation · active · Run sync there; whoami of every connector, resources, knowledge MCP, browser
   — the installation's `.local/.env` and browser profile are copied by the user (Chrome stopped).
   Done except the chrome-devtools MCP in a live session (start was too slow, now pinned).
-- P3-2 · Other installations · active · Each gets AGENTS.md, oikos.yaml, sync; one checked for isolation
-  — credentials resolve `.local/.env` → `oikos.yaml` settings → environment (a fallback every
-  installation shares); `setup status` flags a value taken from the environment. A missing
-  `GITLAB_URL` is a usage error, not a crash.
-- P3-3 · Retire the old checkout · active · Remove `CLAUDE.local.md` and the core's own `.local/`
-  — `CLAUDE.local.md`, `.mcp.json`, `.claude/settings.local.json` removed (the knowledge MCP's
-  permissions moved to the installation). Left: the core's `.local/` (the user deletes it; the
-  secret guard blocks the agent) and the root `.env`.
 - P3-4 · Repository name and first push · active · The user decides the name and pushes
 
 ## Features carried over
@@ -71,3 +61,17 @@ left only for P3-3.
 - F4 · Shared browser as the general route · active · chrome-devtools MCP check; per-resource playbooks
 - F5 · CRM skill over a claude.ai connector · deferred · Once usage is clear
 - F6 · Settings shared by a team · deferred · An installation's own private repository covers most of it
+- F7 · GitHub and GitLab as tracker and wiki · active · Four connectors: issues and wiki on each
+  — the owner's go given; done: write guard and `sync --check` over every tool (0a), shared
+  clients `common/github.mjs` / `common/gitlab.mjs` (0b), `common/sections.mjs`, fake-fetch test
+  helpers, `setup` tokens and whoami per listed connector, OIKOS.md rows. Also done: the four
+  tools with connector files and tests, `writes.mjs`, both SKILL.md. Left (gitlab-issues agent
+  may still be finishing): example `oikos.yaml`, `GITHUB_PUBLIC_REPOS` in OIKOS.md, the design's state, gates, audit; live (TV) checks by the owner;
+  public-repository writes allowed through `GITHUB_PUBLIC_REPOS` (Q8):
+  [docs/design/tracker-wiki-github-gitlab.md](../docs/design/tracker-wiki-github-gitlab.md).
+- F8 · Extension rules from the installation · active · No app or block names in the core's extension
+  — the owner's choice: `oikos.yaml` `browser_helpers` (per site: optional hosts, helpers with
+  `hide`/`open` titles); `sync` builds the extension into `.local/extension/` (core code, a
+  manifest with the installation's hosts, a generated rules file) and `--check` reports it out of
+  date; the user loads that folder unpacked. The core keeps the mechanism and each site's
+  landmarks; `extension/common/helpers.js` and `extension/README.md` lose the named apps.

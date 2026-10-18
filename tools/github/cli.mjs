@@ -2,62 +2,10 @@
 // GitHub: the list of an organization's repositories and the files in them — read-only, by design.
 // The organization is GITHUB_ORG (settings in oikos.yaml) or --org. Issues, projects,
 // wikis and managing repositories are not here.
-import { execFileSync } from 'node:child_process';
-import { runCli, required, printJson, UsageError } from '../common/cli.mjs';
-import { lookup, envValue, credentialsHelp } from '../common/env.mjs';
-import { request, HttpError } from '../common/http.mjs';
+import { runCli, required, printJson } from '../common/cli.mjs';
+import { defaultOrg, githubClient, repoName } from '../common/github.mjs';
 
-const API = 'https://api.github.com';
-const defaultOrg = () => {
-  const org = envValue('GITHUB_ORG');
-  if (!org) throw new UsageError('no organization: pass --org, a full org/name, or set GITHUB_ORG in oikos.yaml settings');
-  return org;
-};
-
-/** GITHUB_TOKEN from the environment / .local/.env, else the `gh` CLI's login. */
-function token() {
-  const t = lookup('GITHUB_TOKEN');
-  if (t.value) return { value: t.value, route: `token (${t.source})` };
-  try {
-    const value = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    if (value) return { value, route: 'gh auth token' };
-  } catch { /* no gh, or not logged in */ }
-  throw new UsageError(`no GitHub credential\n${credentialsHelp(['GITHUB_TOKEN'], {
-    extra: ['  Token (fine-grained, read-only Contents + Metadata on the organization): https://github.com/settings/tokens', '  Or log in once with `gh auth login`.'],
-  })}`);
-}
-
-function gh() {
-  const t = token();
-  const api = async (path, opts = {}) => {
-    try {
-      const { headers = {}, ...rest } = opts;
-      return await request(path.startsWith('http') ? path : `${API}${path}`, {
-        tool: 'github',
-        headers: { Authorization: `Bearer ${t.value}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...headers },
-        ...rest,
-      });
-    } catch (e) {
-      if (e instanceof HttpError && e.status === 401) throw new UsageError(`GitHub rejected the credential (401, route: ${t.route})`);
-      if (e instanceof HttpError && e.status === 404) throw new UsageError(`not found, or no access (GitHub answers 404 for both): ${path}`);
-      throw e;
-    }
-  };
-  /** Follow the Link rel="next" header until `limit` rows. */
-  const paged = async (path, limit) => {
-    const rows = [];
-    let url = `${API}${path}${path.includes('?') ? '&' : '?'}per_page=100`;
-    while (url && rows.length < limit) {
-      const r = await api(url);
-      rows.push(...r.data);
-      url = (r.headers.get('link') || '').match(/<([^>]+)>;\s*rel="next"/)?.[1];
-    }
-    return rows.slice(0, limit);
-  };
-  return { api, paged, route: t.route };
-}
-
-const repoName = (r) => (r.includes('/') ? r : `${defaultOrg()}/${r}`);
+const gh = () => githubClient('github');
 
 const commands = {
   whoami: {
@@ -127,4 +75,4 @@ const commands = {
   },
 };
 
-runCli('github', commands);
+runCli('github', commands, { connector: 'github' });

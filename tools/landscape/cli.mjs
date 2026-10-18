@@ -60,10 +60,10 @@ const commands = {
       const shown = pick(skills, 'dir', names, 'skill');
       if (v.json) return printJson(shown);
       for (const s of shown) {
-        // configured: the installation's choice, default first; else every connector is open to the user's word
-        const use = s.configured ? (s.configured.length ? `${s.configured.join(', ')} (default ${s.configured[0]})` : 'none (switched off here)') : s.connectors.join(', ') || '—';
+        // configured: what the installation lists, default first; nothing listed means no connector
+        const use = s.configured.length ? `${s.configured.join(', ')} (default ${s.configured[0]})` : '—';
         const reaches = resources.filter((r) => r.skills.includes(s.dir)).map((r) => r.resource);
-        console.log(`${s.dir} — ${s.surface}\n  when: ${s.when_to_use}\n  connectors: ${s.connectors.join(', ') || '— (works by itself)'} · used here: ${s.connectors.length ? use : '—'}`
+        console.log(`${s.dir} — ${s.surface}\n  when: ${s.when_to_use}\n  connectors: ${s.connectors.join(', ') || '— (works by itself)'} · used here: ${use}`
           + `${reaches.length ? `\n  resources: ${reaches.join(', ')}` : ''}\n  read: ${s.file}${s.connectors.length ? ', then connectors/<connector>.md' : ''}\n`);
       }
       warn(problems);

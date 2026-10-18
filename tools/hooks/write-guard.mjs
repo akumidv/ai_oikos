@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Enforces "writes need confirmation" (OIKOS.md) for the Jira and Confluence tools.
+// Enforces "writes need confirmation" (OIKOS.md) for every oikos tool that changes a remote
+// service: the tools and commands listed in tools/hooks/writes.mjs, and nothing else.
 //
 // A changing command (tools/hooks/writes.mjs) runs for real only if the same command was first
 // run with --dry-run in this session AND the user has sent a prompt since — i.e. the user has
@@ -14,7 +15,22 @@ import { print, readState, writeState } from './common.mjs';
 import { shellCommand } from './host.mjs';
 import { WRITES } from './writes.mjs';
 
-const TOOL_CALL = /(?:\btools\/(jira|confluence)\/cli\.mjs|\bnpm\s+run\s+(jira|confluence)(?:\s+--)?)\s+([a-z][a-z-]*)/g;
+/**
+ * The pattern of a call of one of `names` with its command word, in both forms:
+ * `tools/<tool>/cli.mjs <command>` and `npm run <tool> [--] <command>`. The tool is group 1 or 2,
+ * the command group 3. Longest name first, so `github-issues` is never read as `github`.
+ * @param {string[]} names tool names (folders under tools/), hyphens allowed
+ * @returns {RegExp} a global pattern for `matchAll`
+ */
+export function toolCallPattern(names) {
+  const tools = [...names]
+    .sort((a, b) => b.length - a.length)
+    .map((n) => n.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
+    .join('|');
+  return new RegExp(`(?:\\btools\\/(${tools})\\/cli\\.mjs|\\bnpm\\s+run\\s+(${tools})(?:\\s+--)?)\\s+([a-z][a-z-]*)`, 'g');
+}
+
+const TOOL_CALL = toolCallPattern(Object.keys(WRITES));
 const DRY_RUN = /(^|\s)--dry-run(?=\s|$)/g;
 const HAS_DRY_RUN = /(^|\s)--dry-run(?=\s|$)/;
 
@@ -61,7 +77,7 @@ export function run(payload) {
   const shownAt = state.dryRuns[sig];
   if (shownAt === undefined) {
     return deny(
-      `oikos write guard: ${writes.join(', ')} changes Jira/Confluence. Run the same command with --dry-run first, ` +
+      `oikos write guard: ${writes.join(', ')} changes a remote service. Run the same command with --dry-run first, ` +
         'show the result to the user and wait for their confirmation; then run it again unchanged without --dry-run.',
     );
   }

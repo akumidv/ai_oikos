@@ -32,3 +32,11 @@ Finished entries moved out of [`TASKS.md`](TASKS.md), same one-line format.
 - P2-4 · Backlog home · done · `_aitna/TASKS.md` is the core backlog, finished entries here
   — AGENTS.md and DEVELOPMENT.md point to it; no dates; an installation's own tasks stay in its
   `.local/TASKS.md`.
+- P3-3 · Retire the old checkout · done · Remove `CLAUDE.local.md` and the core's own `.local/`
+  — `CLAUDE.local.md`, `.mcp.json`, `.claude/settings.local.json`, `.local/` removed; the knowledge
+  MCP's permissions moved to the installation.
+- P3-2 · Other installations · done · Each gets AGENTS.md, oikos.yaml, sync; one checked for isolation
+  — made by `init`, connectors set, synced, `status` ready. Credentials `.local/.env` → `oikos.yaml`
+  → environment; missing credentials are an error; no git-email fallback without a domain; a
+  connector's tool runs only where `connectors:` lists it, and nothing listed means none
+  (landscape, `setup`, session-start). Tokens may stay exported in the shell profile.

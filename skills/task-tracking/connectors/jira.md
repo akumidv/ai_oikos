@@ -117,7 +117,9 @@ node oikos/tools/jira/cli.mjs link --from PROJ-15 --type Blocks --to PROJ-39 --d
 - `transition` moves a task only among the statuses open to an agent — `JIRA_AGENT_STATUSES` in
   `oikos.yaml` settings (default `To Do, In Progress, Blocked`). Any other move is a
   person's — the tool refuses (exit 3) and prints the link for the user.
-- Without credentials every write is forced into dry-run and says so.
+- Without credentials every command stops with exit 1 and names the missing keys, before any
+  request; it never falls back to a dry run. Only `comment --dry-run` and `link --dry-run`, whose
+  preview reads nothing from Jira, still show it — the write itself needs the credentials.
 
 ## The organization's Jira
 
@@ -129,6 +131,7 @@ is the organization's: read its resource note (`node oikos/tools/landscape/cli.m
 ## Credentials
 
 `JIRA_API_TOKEN` (https://id.atlassian.com/manage-profile/security/api-tokens) and `JIRA_EMAIL`
-(an address of `organization.email_domain`; falls back to `git config user.email`) — in
+(an address of `organization.email_domain`; falls back to `git config user.email` only when that
+domain is configured and the git email is in it) — in
 `.local/.env` (the shell environment is only a fallback). `JIRA_BASE_URL` is in the `settings` of `oikos.yaml`. `whoami` shows what is
 set and where from. Never ask for a token in the chat.

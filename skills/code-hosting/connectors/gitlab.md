@@ -36,4 +36,5 @@ otherwise.
 ## Credentials
 
 `GITLAB_TOKEN` (scope `read_api`; create at `<GITLAB_URL>/-/user_settings/personal_access_tokens`)
-in `.local/.env` (the shell environment is only a fallback). `GITLAB_URL` is in the `settings` of `oikos.yaml`. Never ask for a token in the chat.
+in `.local/.env` (the shell environment is only a fallback). `GITLAB_URL` is in the `settings` of `oikos.yaml`.
+Without either, every command stops with exit 1 and names the missing key, before any request. Never ask for a token in the chat.

@@ -28,8 +28,10 @@ export function run() {
 
   const missing = [];
   for (const file of ['AGENTS.md', INSTALL_FILE, join('.local', 'AGENTS.md')]) if (!existsSync(join(root, file))) missing.push(file);
-  if (!existsSync(localEnvFile()) && !neededKeys().some((k) => lookup(k).source)) missing.push('.local/.env');
-  for (const key of neededKeys()) if (!lookup(key).source) missing.push(key);
+  // Only the listed connectors' keys: nothing listed means no connector, so nothing to set.
+  const keys = neededKeys();
+  if (keys.length && !existsSync(localEnvFile()) && !keys.some((k) => lookup(k).source)) missing.push('.local/.env');
+  for (const key of keys) if (!lookup(key).source) missing.push(key);
 
   const context = [`oikos installation: ${root}. \`oikos/\` is oikos itself and is read-only here; the tools run as `
     + '`node oikos/tools/<tool>/cli.mjs …` from this folder. A change to oikos is made in the core repository (DEVELOPMENT.md).'];

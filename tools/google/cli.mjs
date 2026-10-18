@@ -399,4 +399,4 @@ Object.assign(commands, {
   },
 });
 
-if (isMain(import.meta.url)) runCli('google', commands);
+if (isMain(import.meta.url)) runCli('google', commands, { connector: 'google' });

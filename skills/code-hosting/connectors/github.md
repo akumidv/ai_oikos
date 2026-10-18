@@ -26,5 +26,6 @@ node oikos/tools/github/cli.mjs file --repo billing-api --path README.md [--ref 
 
 `GITHUB_TOKEN` in `.local/.env` (the shell environment is only a fallback) — a fine-grained token with read-only
 **Contents** and **Metadata** on the organization (https://github.com/settings/tokens). If it is not
-set, the tool uses the `gh` CLI's login (`gh auth login`). `whoami` names the route taken. Never
+set, the tool uses the `gh` CLI's login (`gh auth login`). `whoami` names the route taken. With
+neither, every command stops with exit 1 and names `GITHUB_TOKEN`, before any request. Never
 ask for a token in the chat.

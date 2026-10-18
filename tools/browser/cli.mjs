@@ -10,7 +10,11 @@
 // the Windows Chrome is found too; it gets the profile through its \\wsl.localhost path. OIKOS_CHROME_PROFILE
 // and OIKOS_CHROME_PATH override. The DevTools port is the installation's (OIKOS_CHROME_PORT, else
 // one derived from its folder), and a Chrome answering there is used only when its process runs
-// with this installation's profile — never just because the port answers.
+// with this installation's profile — never just because the port answers. The installation's code
+// is its folder name; a Chrome oikos started carries it in its profile path
+// (`<code>/.local/browser/chrome-profile`), so a Chrome on the port is told as this installation's,
+// another installation's (named), or one oikos did not start. The MCP server (mcp.mjs) runs the
+// same check (checkPort) before it attaches.
 //
 // Chrome ignores HTTP(S)_PROXY and uses only the system proxy, but the agent works in the
 // environment it was started in (often a proxy that is the only route into the organization's internal hosts). So
@@ -22,10 +26,10 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { platform, arch } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { runCli, isMain, printJson, UsageError } from '../common/cli.mjs';
 import { envValue, CORE_ROOT, isWsl, environment } from '../common/env.mjs';
-import { installPath, localPath, realOf } from '../common/paths.mjs';
+import { installPath, installRoot, localPath, realOf } from '../common/paths.mjs';
 import { PROJECT_PROGRAMS, findProgram, installed, missingLibraries, progress, windowsSide,
   toolDependenciesInstalled, installToolDependencies } from '../common/programs.mjs';
 
@@ -40,6 +44,9 @@ export function defaultPort(dir) {
 /** This installation's DevTools port: OIKOS_CHROME_PORT (oikos.yaml settings), else defaultPort(). */
 export const browserPort = () => Number(envValue('OIKOS_CHROME_PORT') || defaultPort(installPath()));
 const port = (v) => Number(v.port || browserPort());
+
+/** This installation's code — its folder name — which its browser is told by. */
+export const installationCode = () => basename(installPath());
 
 const CHROME_DIR = join(PROJECT_PROGRAMS, 'chrome'); // @puppeteer/browsers: <cacheDir>/chrome/<platform>-<build>/
 const TESTING_APP = 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
@@ -80,6 +87,15 @@ function profileDir() {
     return execFileSync('wslpath', ['-w', dir], { encoding: 'utf8' }).trim();
   }
   return dir;
+}
+
+/** profileDir() for telling whose a Chrome is: null when no Chrome is found here to say which profile. */
+function ownProfile() {
+  try {
+    return profileDir();
+  } catch {
+    return null;
+  }
 }
 
 /** Under WSL a Windows Chrome's loopback port is probed from the Windows side. */
@@ -163,23 +179,60 @@ const samePath = (a, b) => {
 };
 
 /**
- * Whose Chrome answers on port `p`: { owner: 'ours' } when its profile is this installation's,
- * { owner: 'foreign', profile } when another one's (another installation, the user's own Chrome),
- * { owner: 'unknown' } when no process with that port could be read. A DevTools answer alone says
- * nothing about whose browser it is, and driving another installation's signed-in window is the
- * one thing this tool must not do.
+ * The installation an oikos profile belongs to — `<code>/.local/browser/chrome-profile[-project]`,
+ * as a Linux, macOS or Windows (`\\wsl.localhost\…`) path — or null for any other profile.
  */
-export function ownerOf(p, profile = profileDir()) {
-  const dirs = chromeCommandLines(p).map(userDataDir);
+export const profileInstallation = (dir) => String(dir || '')
+  .match(/([^\\/]+)[\\/]\.local[\\/]browser[\\/]chrome-profile(?:-project)?[\\/]*$/)?.[1] || null;
+
+/**
+ * Whose Chrome the processes in `commandLines` (those listening on the DevTools port) are, for the
+ * installation at `root`. `profile` is the profile this installation gives its Chrome now, `launch`
+ * the content of its `.local/browser/launch.json` (the profile of its last `start`). Returns
+ * { owner: 'ours', installation } when a process runs with one of this installation's profiles;
+ * { owner: 'foreign', installation, profile } otherwise — `installation` the code of the oikos
+ * installation whose profile it is, null for a Chrome oikos did not start; { owner: 'unknown' }
+ * when there is no process to tell by. A DevTools answer alone says nothing about whose browser it
+ * is, and driving another installation's signed-in window is the one thing this tool must not do.
+ */
+export function chromeOwnership(commandLines, { root = null, launch = null, profile = null } = {}) {
+  const dirs = commandLines.map(userDataDir);
   if (!dirs.length) return { owner: 'unknown' };
-  if (dirs.some((d) => d && samePath(d, profile))) return { owner: 'ours' };
-  return { owner: 'foreign', profile: dirs.find(Boolean) || '(the default profile)' };
+  const own = [profile, launch?.profile].filter(Boolean);
+  if (root) own.push(join(root, '.local', 'browser', 'chrome-profile'), join(root, '.local', 'browser', 'chrome-profile-project'));
+  if (dirs.some((d) => d && own.some((o) => samePath(d, o)))) return { owner: 'ours', installation: root ? basename(root) : null };
+  const used = dirs.find(Boolean) || null;
+  return { owner: 'foreign', installation: profileInstallation(used), profile: used };
 }
 
-const foreignMessage = (p, o) => (o.owner === 'foreign'
-  ? `the Chrome on 127.0.0.1:${p} uses the profile ${o.profile}, not this installation's — another installation's or the user's own browser. `
-  : `a Chrome answers on 127.0.0.1:${p}, but whose it is cannot be told (its process was not found). `)
-  + 'oikos does not drive it: set OIKOS_CHROME_PORT in the settings of oikos.yaml to a free port, or close that Chrome.';
+/** Whose Chrome answers on port `p` (chromeOwnership), read from the running processes. */
+export function ownerOf(p, profile = ownProfile()) {
+  return chromeOwnership(chromeCommandLines(p), { root: installRoot(), launch: readLaunch(), profile });
+}
+
+/** Who a Chrome that is not this installation's is, in words. */
+function whose(owner) {
+  if (owner.owner === 'unknown') return 'a Chrome whose process was not found, so whose it is cannot be told';
+  const profile = owner.profile ? `profile ${owner.profile}` : 'its default profile';
+  return owner.installation ? `the Chrome of installation ${owner.installation} (${profile})` : `a Chrome not started by oikos (${profile})`;
+}
+
+/** Why a Chrome on `port` that is not installation `code`'s is not driven, and how to fix it. */
+export const notOursMessage = (owner, { port, code }) => `the Chrome on 127.0.0.1:${port} is ${whose(owner)}, `
+  + `not installation ${code}'s. oikos does not drive it: close that Chrome, or set OIKOS_CHROME_PORT in the settings of oikos.yaml `
+  + `to a free port; then start this installation's: node oikos/tools/browser/cli.mjs start`;
+
+/**
+ * The Chrome answering on port `p`, checked — the one check `start`, `status`, `stop` and the MCP
+ * server make: null when nothing answers; else { version, owner, refusal }, `refusal` null for this
+ * installation's Chrome and the reason not to drive it otherwise. `probe` and `owner` are for tests.
+ */
+export async function checkPort(p, { probe = devtools, owner = ownerOf, code = installationCode() } = {}) {
+  const version = await probe(p);
+  if (!version) return null;
+  const o = owner(p);
+  return { version, owner: o, refusal: o.owner === 'ours' ? null : notOursMessage(o, { port: p, code }) };
+}
 
 /** Stop the oikos Chrome (the one using our profile), wherever it runs. */
 async function stopChrome(p, profile) {
@@ -206,19 +259,20 @@ const commands = {
     options: { port: { type: 'string' } },
     async run(v) {
       const p = port(v);
-      const version = await devtools(p);
-      if (!version) {
-        console.log(`no Chrome DevTools on 127.0.0.1:${p}. Start it: node oikos/tools/browser/cli.mjs start`);
+      const code = installationCode();
+      const found = await checkPort(p);
+      if (!found) {
+        console.log(`no Chrome DevTools on 127.0.0.1:${p} (installation ${code}). Start it: node oikos/tools/browser/cli.mjs start`);
         return 1;
       }
-      const owner = ownerOf(p);
-      if (owner.owner !== 'ours') {
-        console.log(`not this installation's browser: ${foreignMessage(p, owner)}`);
+      if (found.refusal) {
+        console.log(`not this installation's browser: ${found.refusal}`);
         return 1;
       }
+      const { version } = found;
       const tabs = ((await devtools(p, '/json/list')) || []).filter((t) => t.type === 'page');
-      if (v.json) return printJson({ version, tabs });
-      console.log(`Chrome ${version.Browser} on 127.0.0.1:${p} — ${tabs.length} tab(s)`);
+      if (v.json) return printJson({ installation: code, version, tabs });
+      console.log(`Chrome ${version.Browser} of installation ${code} on 127.0.0.1:${p} — ${tabs.length} tab(s)`);
       const launch = readLaunch();
       const now = proxyArgs().describe;
       if (launch) {
@@ -235,12 +289,13 @@ const commands = {
     options: { port: { type: 'string' } },
     async run(v) {
       const p = port(v);
-      if (!(await devtools(p))) { console.log('no oikos Chrome is running'); return 0; }
-      const owner = ownerOf(p);
-      if (owner.owner !== 'ours') { console.log(`left running: ${foreignMessage(p, owner)}`); return 1; }
+      const code = installationCode();
+      const found = await checkPort(p);
+      if (!found) { console.log(`no Chrome of installation ${code} is running on 127.0.0.1:${p}`); return 0; }
+      if (found.refusal) { console.log(`left running: ${found.refusal}`); return 1; }
       await stopChrome(p, profileDir());
       for (let i = 0; i < 10 && (await devtools(p)); i++) await new Promise((r) => setTimeout(r, 500));
-      console.log((await devtools(p)) ? 'Chrome still answers — close it by hand' : 'stopped');
+      console.log((await devtools(p)) ? `the Chrome of installation ${code} still answers — close it by hand` : `stopped the Chrome of installation ${code}`);
     },
   },
 
@@ -258,11 +313,12 @@ const commands = {
     options: { port: { type: 'string' }, url: { type: 'string' } },
     async run(v) {
       const p = port(v);
-      if (await devtools(p)) {
-        const owner = ownerOf(p);
-        if (owner.owner !== 'ours') throw new UsageError(foreignMessage(p, owner));
+      const code = installationCode();
+      const found = await checkPort(p);
+      if (found?.refusal) throw new UsageError(found.refusal);
+      if (found) {
         const launch = readLaunch();
-        console.log(`This installation's Chrome is already listening on 127.0.0.1:${p} (proxy: ${launch?.proxy || 'unknown'}). Use \`restart\` to relaunch it with the current environment.`);
+        console.log(`The Chrome of installation ${code} is already listening on 127.0.0.1:${p} (proxy: ${launch?.proxy || 'unknown'}). Use \`restart\` to relaunch it with the current environment.`);
         return 0;
       }
       const exe = chromePath();
@@ -275,7 +331,7 @@ const commands = {
       if (v.url) args.push(v.url);
       spawn(exe, args, { detached: true, stdio: 'ignore' }).unref();
       writeFileSync(launchFile(), `${JSON.stringify({ started: new Date().toISOString(), exe, profile, port: p, proxy: proxy.describe, args }, null, 2)}\n`);
-      console.log(`Started ${exe}\n  profile: ${profile}\n  DevTools port: ${p}\n  proxy: ${proxy.describe}`);
+      console.log(`Started the Chrome of installation ${code}: ${exe}\n  profile: ${profile}\n  DevTools port: ${p}\n  proxy: ${proxy.describe}`);
       if (headless) console.log('  headless: no graphical session — the user does not see this Chrome; describe the page to them, and a sign-in only the user can do (SSO, MFA) is not possible here');
       for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 500));
