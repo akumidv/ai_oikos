@@ -1,0 +1,9 @@
+{
+  "name": "oikos-browser",
+  "private": true,
+  "description": "npm dependencies of tools/browser only, installed by `node tools/browser/cli.mjs install --yes`",
+  "type": "module",
+  "dependencies": {
+    "@puppeteer/browsers": "^3.2.3"
+  }
+}

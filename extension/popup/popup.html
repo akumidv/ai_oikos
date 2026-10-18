@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>oikos</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="../icons/icon-48.png" alt="" width="32" height="32">
+    <div>
+      <h1>oikos <span id="version"></span></h1>
+      <p class="tagline">assistant for an organization's resources</p>
+    </div>
+  </header>
+
+  <p class="about">
+    oikos helps you work with your organization's resources — documents and the
+    knowledge base, task tracking, the wiki, code hosting — through an AI agent. In the browser it adds
+    small helpers to the sites we work in.
+  </p>
+
+  <section id="page" class="page" hidden></section>
+
+  <main id="sites"></main>
+
+  <footer>
+    <button id="copy" type="button" hidden>Copy diagnostics</button>
+  </footer>
+
+  <script src="../common/helpers.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

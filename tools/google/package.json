@@ -1,0 +1,10 @@
+{
+  "name": "oikos-google",
+  "private": true,
+  "description": "npm dependencies of tools/google only (the mail route over IMAP), installed by `node tools/google/cli.mjs install --yes`",
+  "type": "module",
+  "dependencies": {
+    "imapflow": "^2.1.2",
+    "mailparser": "^3.9.3"
+  }
+}

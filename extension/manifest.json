@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "oikos",
+  "version": "0.1.0",
+  "description": "oikos in the browser: small helpers for the web resources you work in, Jira first.",
+  "minimum_chrome_version": "111",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "oikos",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://*.atlassian.net/*"],
+      "exclude_matches": ["https://*.atlassian.net/wiki/*"],
+      "css": ["common/sections.css"],
+      "js": ["common/helpers.js", "common/sections.js", "sites/jira/content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

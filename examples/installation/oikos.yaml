@@ -1,0 +1,16 @@
+# An example installation (ACME Corp) — the fixture the tests copy; see README.md
+organization:
+  name: ACME Corp
+  email_domain: acme.example
+
+connectors:
+  code-hosting: [github]
+  task-tracking: [jira]
+  wiki: [confluence]
+
+settings:
+  JIRA_BASE_URL: https://acme.atlassian.net
+  GITHUB_ORG: acme-corp
+
+mcp_servers:
+  knowledge: { type: http, url: https://kb.example.com/mcp }

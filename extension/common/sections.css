@@ -1,0 +1,4 @@
+/* A block common/sections.js hid: no layout, no paint. Injected before the page is built. */
+[data-oikos-hidden] {
+  display: none !important;
+}

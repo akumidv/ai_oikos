@@ -1,0 +1,24 @@
+name: akmon
+
+on: [push, pull_request]
+
+jobs:
+  akmon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: python3 _aitna/akmon/bin/sync.py --check
+      - run: python3 _aitna/akmon/bin/verify.py --strict
+
+  oikos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run check
+      - run: npm test

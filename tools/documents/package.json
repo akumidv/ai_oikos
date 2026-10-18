@@ -1,0 +1,9 @@
+{
+  "name": "oikos-documents",
+  "private": true,
+  "description": "npm dependencies of tools/documents only, installed by `node tools/documents/cli.mjs install --yes`",
+  "type": "module",
+  "dependencies": {
+    "docx": "^9.5.1"
+  }
+}

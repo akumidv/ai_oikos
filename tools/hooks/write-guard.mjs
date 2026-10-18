@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+// Enforces "writes need confirmation" (OIKOS.md) for the Jira and Confluence tools.
+//
+// A changing command (tools/hooks/writes.mjs) runs for real only if the same command was first
+// run with --dry-run in this session AND the user has sent a prompt since — i.e. the user has
+// seen the dry run and had a turn to answer. Otherwise the call is denied with the reason, in
+// every permission mode, so auto mode cannot skip the step. The hook cannot judge what the user
+// answered; it guarantees the dry run was shown and the user had the word.
+//
+// Wired twice: UserPromptSubmit counts the user's prompts, PreToolUse(shell) checks the command.
+// "The same command" is the whole shell command with `--dry-run` removed and whitespace
+// collapsed, so any change to the text after the dry run needs a new dry run.
+import { print, readState, writeState } from './common.mjs';
+import { shellCommand } from './host.mjs';
+import { WRITES } from './writes.mjs';
+
+const TOOL_CALL = /(?:\btools\/(jira|confluence)\/cli\.mjs|\bnpm\s+run\s+(jira|confluence)(?:\s+--)?)\s+([a-z][a-z-]*)/g;
+const DRY_RUN = /(^|\s)--dry-run(?=\s|$)/g;
+const HAS_DRY_RUN = /(^|\s)--dry-run(?=\s|$)/;
+
+const signature = (command) => command.replace(DRY_RUN, ' ').replace(/\s+/g, ' ').trim();
+
+function writesIn(command) {
+  const found = [];
+  for (const m of command.matchAll(TOOL_CALL)) {
+    const tool = m[1] || m[2];
+    if (WRITES[tool]?.includes(m[3])) found.push(`${tool} ${m[3]}`);
+  }
+  return [...new Set(found)];
+}
+
+function deny(reason) {
+  print({
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
+  });
+}
+
+export function run(payload) {
+  const sid = payload.session_id;
+  const state = readState(sid, 'writes', { prompts: 0, dryRuns: {} });
+
+  if (payload.hook_event_name === 'UserPromptSubmit') {
+    if (payload.agent_id) return;
+    state.prompts += 1;
+    writeState(sid, 'writes', state);
+    return;
+  }
+
+  const command = shellCommand(payload);
+  if (!command) return;
+  const writes = writesIn(command);
+  if (!writes.length || /(^|\s)--help(?=\s|$)/.test(command)) return;
+
+  const sig = signature(command);
+  if (HAS_DRY_RUN.test(command)) {
+    state.dryRuns[sig] = state.prompts;
+    writeState(sid, 'writes', state);
+    return;
+  }
+
+  const shownAt = state.dryRuns[sig];
+  if (shownAt === undefined) {
+    return deny(
+      `oikos write guard: ${writes.join(', ')} changes Jira/Confluence. Run the same command with --dry-run first, ` +
+        'show the result to the user and wait for their confirmation; then run it again unchanged without --dry-run.',
+    );
+  }
+  if (shownAt >= state.prompts) {
+    return deny(
+      `oikos write guard: the dry run of ${writes.join(', ')} has not been answered yet. ` +
+        'Show it to the user and wait for their confirmation in their next message.',
+    );
+  }
+  delete state.dryRuns[sig];
+  writeState(sid, 'writes', state);
+}

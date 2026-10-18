@@ -1,0 +1,71 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" session-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" write-guard"
+          },
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" context-pressure"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^run_shell_command$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" write-guard"
+          },
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" git-guard"
+          },
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" secret-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "^(read_file|grep_search|glob|list_directory|edit|write_file|notebook_edit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" secret-guard"
+          },
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" package-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "^agent$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" context-pressure"
+          }
+        ]
+      }
+    ]
+  },
+  "$version": 4
+}
