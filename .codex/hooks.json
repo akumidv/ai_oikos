@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/_aitna/akmon/hooks/codex-hook.py\" role-on-code",
+            "command": "node \"$(git rev-parse --show-toplevel)/_aitna/akmon/js/hooks/codex-hook.mjs\" role-on-code",
             "statusMessage": "Checking akmon role switch"
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/_aitna/akmon/hooks/codex-hook.py\" analysis-guard",
+            "command": "node \"$(git rev-parse --show-toplevel)/_aitna/akmon/js/hooks/codex-hook.mjs\" analysis-guard",
             "statusMessage": "Checking analysis-before-mutation"
           }
         ]
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/_aitna/akmon/hooks/codex-hook.py\" session-start",
+            "command": "node \"$(git rev-parse --show-toplevel)/_aitna/akmon/js/hooks/codex-hook.mjs\" session-start",
             "statusMessage": "Loading akmon session reminders"
           }
         ]

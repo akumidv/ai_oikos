@@ -9,8 +9,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - run: python3 _aitna/akmon/bin/sync.py --check
-      - run: python3 _aitna/akmon/bin/verify.py --strict
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node _aitna/akmon/js/akmon/cli.mjs sync --check
+      - run: node _aitna/akmon/js/akmon/cli.mjs verify --strict
 
   oikos:
     runs-on: ubuntu-latest

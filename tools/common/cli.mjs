@@ -58,8 +58,14 @@ export async function runCli(toolName, commands, { connector } = {}) {
   try {
     if (connector) requireConnector(connector);
     const code = await cmd.run(parsed.values, parsed.positionals);
-    process.exit(code ?? 0);
+    // A dry run that would be refused (a flagged content check, common/outgoing.mjs) prints its
+    // whole preview and sets process.exitCode; a command's own non-zero code wins.
+    process.exit(code || process.exitCode || 0);
   } catch (e) {
+    if (e instanceof GuardRefusal) {
+      console.error(e.message);
+      process.exit(3);
+    }
     // NoInstallation (common/paths.mjs): run outside any installation — a usage error too.
     const usage = e instanceof UsageError || e?.name === 'NoInstallation';
     if (usage || e instanceof HttpError || e instanceof ChannelError) {
@@ -71,6 +77,12 @@ export async function runCli(toolName, commands, { connector } = {}) {
 }
 
 export class UsageError extends Error {}
+
+/**
+ * A guard's refusal: runCli prints the message on stderr as it is — it carries its own prefix
+ * (`refused: content check: …`) — and exits 3, the one "refused by a guard" code.
+ */
+export class GuardRefusal extends Error {}
 
 /**
  * Stop a connector tool before any credential lookup or request unless the installation uses it:
@@ -104,10 +116,3 @@ export function required(values, ...names) {
 }
 
 export const printJson = (data) => console.log(JSON.stringify(data, null, 2));
-
-/** Non-Latin letters in text (Cyrillic etc.) — Jira and Confluence content is English. */
-export function nonLatinLetters(text) {
-  const found = new Set();
-  for (const ch of text) if (/\p{L}/u.test(ch) && ch.codePointAt(0) > 0x024f) found.add(ch);
-  return [...found].sort().join('');
-}

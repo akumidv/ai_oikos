@@ -4,6 +4,7 @@ description: Work with the organization's messenger — search messages, read a 
 when_to_use: Whenever a question is about channels, threads or messages, or something has to be posted.
 metadata:
   owner: oikos
+  group: collaboration
 surface: the organization's messenger workspace — search, channels, threads; posting only after confirmation
 connectors: slack
 refuses: posting, replying, reacting or changing channels without the user's explicit confirmation of the exact text and channel; reading private channels or direct messages the user did not point to

@@ -38,9 +38,10 @@ export function writeState(sessionId, kind, value) {
 
 /**
  * A Bash command split into segments at `;` `&&` `||` `|` `&` newlines and parentheses, each a
- * list of quote-aware tokens with the leading `VAR=…`, `env …`, `command`, `nohup`, `time`,
- * `exec` stripped, so `exe` is the program actually run. Best effort: text inside `bash -c "…"`
- * or a heredoc is one token and is not looked into.
+ * list of quote-aware tokens with the leading control words (`if`, `then`, `do`, `!`, `{`, …),
+ * `VAR=…`, `env …`, `command`, `nohup`, `time`, `exec` stripped, so `exe` is the program actually
+ * run (`for b in x; do git push; done` runs `git`). Best effort: text inside `bash -c "…"` or a
+ * heredoc is one token and is not looked into here (the write guard reads `bash -c` itself).
  */
 export function shellSegments(command) {
   const segments = [];
@@ -52,8 +53,11 @@ export function shellSegments(command) {
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
     if (quote) {
+      // In double quotes bash drops a backslash only before $ ` " \ and a newline (the pair
+      // `\`+newline vanishes); before any other character it stays.
       if (ch === quote) quote = null;
-      else if (ch === '\\' && quote === '"' && i + 1 < command.length) token += command[++i];
+      else if (ch === '\\' && quote === '"' && command[i + 1] === '\n') i++;
+      else if (ch === '\\' && quote === '"' && '$`"\\'.includes(command[i + 1] ?? 'x')) token += command[++i];
       else token += ch;
     } else if (ch === "'" || ch === '"') {
       quote = ch;
@@ -74,10 +78,24 @@ export function shellSegments(command) {
 }
 
 const PREFIXES = new Set(['command', 'nohup', 'time', 'exec', 'builtin']);
+/**
+ * The shell's control words that may stand before a command in one segment: the command after
+ * them is the one that runs. A reserved word counts only as the first word of a command or after
+ * another one, so they are stripped before any `VAR=…` or prefix, never after.
+ */
+const CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', 'time']);
 
-function stripPrefix(tokens) {
+/**
+ * One segment's tokens read as shellSegments reads them: the leading control words, `VAR=…`,
+ * `env …` and prefixes stripped to find `exe`, the program actually run. `tokens` stays the
+ * segment as written.
+ * @param {string[]} tokens
+ * @returns {{exe: string|null, args: string[], viaEnv: boolean, tokens: string[]}}
+ */
+export function stripPrefix(tokens) {
   let i = 0;
   let viaEnv = false;
+  while (i < tokens.length && CONTROL_WORDS.has(tokens[i])) i++;
   for (;;) {
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
     if (tokens[i] === 'env') {

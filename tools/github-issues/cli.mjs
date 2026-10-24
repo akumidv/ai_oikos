@@ -5,7 +5,8 @@
 // field of the project in GITHUB_PROJECT, else from labels.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { runCli, required, printJson, nonLatinLetters, UsageError, isMain } from '../common/cli.mjs';
+import { runCli, required, printJson, UsageError, isMain } from '../common/cli.mjs';
+import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { githubClient, githubEndpoints } from '../common/github.mjs';
 import { HttpError } from '../common/http.mjs';
 import { envValue } from '../common/env.mjs';
@@ -304,12 +305,9 @@ function allIterations(field) {
 /** The text of --text or --file. */
 const readText = (v) => (v.file ? readFileSync(v.file, 'utf8') : v.text);
 
-/** Writes are English unless --allow-non-english. */
-function englishOnly(v, ...texts) {
-  const foreign = nonLatinLetters(texts.filter(Boolean).join(' '));
-  if (foreign && !v['allow-non-english']) {
-    throw new UsageError(`GitHub content is English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
-  }
+/** The content check (common/outgoing.mjs) of a write's texts, in its dry run and its real run. */
+function checkContent(v, texts) {
+  guardOutgoing(texts, v, outgoingRules());
 }
 
 /** The @mentions of a markdown text outside code (users and `org/team`): each one notifies. */
@@ -858,7 +856,7 @@ function offlineNote(message) {
 
 // == writes =====================================================================================
 
-const TEXT = { 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' } };
+const TEXT = { 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' }, 'allow-flagged': { type: 'boolean' } };
 
 /** `move-to-sprint` when the project has no iteration field: the milestone of one repository. */
 async function milestoneMove(g, s, v, project, refs, repos) {
@@ -940,7 +938,7 @@ Object.assign(commands, {
       const full = targetRepo(v, s);
       const policy = statusPolicy(s);
       const body = v.file ? readFileSync(v.file, 'utf8') : v.description;
-      englishOnly(v, v.summary, body);
+      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: body }]);
       if ((v.status || v.sprint) && !v['add-to-project']) throw new UsageError('--status and --sprint set fields of the project: pass --add-to-project too');
       if (v['add-to-project'] && !s.project) throw new UsageError('--add-to-project adds the issue to the project in GITHUB_PROJECT: set it (the organization project number) in oikos.yaml settings');
       if (v.status && (CLOSING.test(v.status.trim()) || !policy.isAgent(v.status))) {
@@ -1006,7 +1004,7 @@ Object.assign(commands, {
         throw new Refusal(`--state: an agent never closes or reopens an issue — that is a person's move${links}`);
       }
       const body = v.file ? readFileSync(v.file, 'utf8') : v.description;
-      englishOnly(v, v.summary, body);
+      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: body }]);
       const setLabels = v.labels !== undefined ? splitList(v.labels) : null;
       const add = splitList(v['add-labels']);
       const remove = splitList(v['remove-labels']);
@@ -1087,7 +1085,7 @@ Object.assign(commands, {
       const ref = parseTask(v.task, s);
       const text = readText(v);
       if (!text?.trim()) throw new UsageError('--text or --file is required');
-      englishOnly(v, text);
+      checkContent(v, [{ label: 'comment', text }]);
       const dry = Boolean(v['dry-run']);
       // The preview of a comment needs nothing from GitHub, so an explicit --dry-run runs without
       // credentials; with them it also checks the repository's visibility and the issue.

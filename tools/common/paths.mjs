@@ -124,3 +124,24 @@ export const coreLabel = (rel) => `${installRoot() ? 'oikos/' : ''}${rel}`;
 
 /** A path in the installation's private `.local/` folder; throws when there is no installation. */
 export const localPath = (...parts) => installPath('.local', ...parts);
+
+/**
+ * The stores a tool keeps in `.local/`, each under a dot name the secret guard keeps closed
+ * (ADR 0002 D02), with the place it had before (D03). `oikos sync` moves a store from `legacy` to
+ * `parts` (tools/common/local-stores.mjs); until then the tools use it where it is.
+ */
+export const LOCAL_STORES = Object.freeze({
+  google: Object.freeze({ parts: Object.freeze(['.secrets', 'google']), legacy: Object.freeze(['google']) }),
+  browser: Object.freeze({ parts: Object.freeze(['.browser']), legacy: Object.freeze(['browser']) }),
+});
+
+/**
+ * The folder of the store `name` (a key of LOCAL_STORES) in `.local/`: its place, or its legacy
+ * place while only that exists. Throws when there is no installation.
+ */
+export function localStorePath(name) {
+  const { parts, legacy } = LOCAL_STORES[name];
+  const now = localPath(...parts);
+  const old = localPath(...legacy);
+  return !existsSync(now) && existsSync(old) ? old : now;
+}

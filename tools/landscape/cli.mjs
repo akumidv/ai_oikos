@@ -3,7 +3,7 @@
 // frontmatter, the installation's oikos.yaml and its resource notes
 // (tools/common/landscape.mjs) — the overview is never written into a file.
 import { runCli, printJson, UsageError } from '../common/cli.mjs';
-import { loadLandscape } from '../common/landscape.mjs';
+import { loadLandscape, GROUPS } from '../common/landscape.mjs';
 
 const AUTH = { none: 'none', git: 'git access', token: 'personal API token', connector: 'claude.ai connector', browser: 'browser sign-in (user)', sso: 'SSO' };
 
@@ -22,6 +22,15 @@ function pick(items, key, ids, what) {
 
 function warn(problems) {
   if (problems.length) console.error(`${problems.length} problem(s) in the notes or skills — node oikos/tools/sync/cli.mjs --check`);
+}
+
+/** One skill of the `skills` overview: what it covers, when, its connectors and the resources it reaches. */
+function printSkill(s, resources) {
+  // configured: what the installation lists, default first; nothing listed means no connector
+  const use = s.configured.length ? `${s.configured.join(', ')} (default ${s.configured[0]})` : '—';
+  const reaches = resources.filter((r) => r.skills.includes(s.dir)).map((r) => r.resource);
+  console.log(`${s.dir} — ${s.surface}\n  when: ${s.when_to_use}\n  connectors: ${s.connectors.join(', ') || '— (works by itself)'} · used here: ${use}`
+    + `${reaches.length ? `\n  resources: ${reaches.join(', ')}` : ''}\n  read: ${s.file}${s.connectors.length ? ', then connectors/<connector>.md' : ''}\n`);
 }
 
 const commands = {
@@ -59,12 +68,14 @@ const commands = {
       const { skills, resources, problems } = loadLandscape();
       const shown = pick(skills, 'dir', names, 'skill');
       if (v.json) return printJson(shown);
-      for (const s of shown) {
-        // configured: what the installation lists, default first; nothing listed means no connector
-        const use = s.configured.length ? `${s.configured.join(', ')} (default ${s.configured[0]})` : '—';
-        const reaches = resources.filter((r) => r.skills.includes(s.dir)).map((r) => r.resource);
-        console.log(`${s.dir} — ${s.surface}\n  when: ${s.when_to_use}\n  connectors: ${s.connectors.join(', ') || '— (works by itself)'} · used here: ${use}`
-          + `${reaches.length ? `\n  resources: ${reaches.join(', ')}` : ''}\n  read: ${s.file}${s.connectors.length ? ', then connectors/<connector>.md' : ''}\n`);
+      // By group, in GROUPS order; a skill whose group is missing or unknown comes last, under '?'.
+      const groups = [...Object.keys(GROUPS), '?'];
+      const groupOf = (s) => (Object.hasOwn(GROUPS, s.group) ? s.group : '?');
+      for (const g of groups) {
+        const inGroup = shown.filter((s) => groupOf(s) === g);
+        if (!inGroup.length) continue;
+        console.log(`## ${g} — ${GROUPS[g] || 'no valid metadata.group'}\n`);
+        for (const s of inGroup) printSkill(s, resources);
       }
       warn(problems);
     },

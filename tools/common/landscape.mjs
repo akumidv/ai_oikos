@@ -23,6 +23,14 @@ export const SKILLS = join(CORE_ROOT, 'skills');
 export const resourcesDir = () => (installRoot() ? join(installRoot(), 'resources') : null);
 const RES = 'resources';
 const SKILL_KEYS = ['name', 'description', 'when_to_use', 'surface', 'refuses'];
+/** The skill groups, in the order the overview shows them; a skill names one in `metadata.group`. */
+export const GROUPS = Object.freeze({
+  engineering: 'code, its hosting and the work tracked on it',
+  collaboration: 'where people talk and keep shared knowledge: messenger, wiki, mail and calendar',
+  files: 'the user\'s documents and where they are',
+  web: 'web resources used through their interface',
+  hr: 'people: candidates, CVs, hiring, the footprint of a person\'s work',
+});
 const RESOURCE_KEYS = ['id', 'title', 'domain', 'status', 'resource', 'kind', 'network', 'url', 'auth'];
 
 /** `---` YAML frontmatter and the body after it; throws when the YAML does not parse. */
@@ -49,7 +57,7 @@ function read(file, label, problems) {
 
 /**
  * Skills, resources and the links between them, plus every schema problem found.
- * skills: [{ ...frontmatter, dir, connectors: [name], configured: [name], file }]
+ * skills: [{ ...frontmatter, dir, group, connectors: [name], configured: [name], file }]
  *   (`configured` is what the installation lists for the skill, default first; empty when it lists
  *   none — then no connector of the skill is used here, as common/cli.mjs requireConnector enforces);
  * resources: [{ ...frontmatter, via: [name], purpose, file, skills: [name] }].
@@ -69,6 +77,9 @@ export function loadLandscape() {
     for (const k of SKILL_KEYS) if (!fm[k]) problems.push(`skills/${dir}/SKILL.md: missing '${k}'`);
     // The owner sits under `metadata:`, where the Agent Skills format and akmon's verify expect it.
     if (!fm.metadata?.owner) problems.push(`skills/${dir}/SKILL.md: missing 'metadata.owner'`);
+    const group = fm.metadata?.group;
+    if (!group) problems.push(`skills/${dir}/SKILL.md: missing 'metadata.group' (one of ${Object.keys(GROUPS).join(', ')})`);
+    else if (!Object.hasOwn(GROUPS, group)) problems.push(`skills/${dir}/SKILL.md: metadata.group '${group}' is not one of ${Object.keys(GROUPS).join(', ')} (tools/common/landscape.mjs GROUPS)`);
     if (fm.name && fm.name !== dir) problems.push(`skills/${dir}/SKILL.md: name '${fm.name}' differs from the folder`);
     if (fm.resources !== undefined) problems.push(`skills/${dir}/SKILL.md: 'resources' is gone — a resource note names the skill in its 'via'`);
     const connectors = list(fm.connectors);
@@ -78,7 +89,7 @@ export function loadLandscape() {
     for (const f of files) if (!connectors.includes(f)) problems.push(`skills/${dir}/connectors/${f}.md: not listed in the skill's 'connectors'`);
     const configured = cfg.connectors[dir] ?? [];
     for (const c of configured) if (!connectors.includes(c)) problems.push(`${INSTALL_FILE}: connectors.${dir} names '${c}', which the skill does not have (${connectors.join(', ') || 'none'})`);
-    skills.push({ ...fm, dir, connectors, configured, file: coreLabel(`skills/${dir}/SKILL.md`) });
+    skills.push({ ...fm, dir, group, connectors, configured, file: coreLabel(`skills/${dir}/SKILL.md`) });
   }
   for (const s of Object.keys(cfg.connectors)) if (!dirs.includes(s)) problems.push(`${INSTALL_FILE}: connectors.${s} — no such skill`);
 

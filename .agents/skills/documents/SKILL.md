@@ -5,6 +5,7 @@ description: Make, read and convert office documents and PDFs — Word (.docx), 
 when_to_use: Whenever the input or the result is an office file or a PDF.
 metadata:
   owner: oikos
+  group: files
 surface: office files and PDFs, made or read locally (tools/documents), filed in the vault, on Drive or where the user keeps them
 refuses: sending or sharing a finished file (that goes through the google or slack skill, with confirmation), and putting confidential content into a file the user did not ask for
 ---

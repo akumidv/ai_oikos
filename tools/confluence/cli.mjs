@@ -4,7 +4,8 @@
 // organization's knowledge is the knowledge base's job; `read` is for the current text of one known page.
 // Shares the Atlassian identity with jira (JIRA_* variables). Every write has --dry-run.
 import { readFileSync } from 'node:fs';
-import { runCli, printJson, nonLatinLetters, UsageError } from '../common/cli.mjs';
+import { runCli, printJson, UsageError } from '../common/cli.mjs';
+import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { atlassianCreds, credsComplete, atlassianHelp, atlassianClient, missingCreds } from '../common/atlassian.mjs';
 import { adfInline, adfToText, markdownToAdfContent } from '../common/adf.mjs';
 
@@ -36,6 +37,9 @@ async function fetchPage(wiki, id, withBody) {
 
 const pageUrl = (c, page) => `${c.baseUrl}/wiki/spaces/-/pages/${page.id}`;
 
+/** The override flags of the content check, on every command that writes text. */
+const CHECK_OPTIONS = { 'allow-non-english': { type: 'boolean' }, 'allow-flagged': { type: 'boolean' } };
+
 const commands = {
   info: {
     help: 'title, space, version and URL of a page (--page ID|URL) — run before every write',
@@ -61,7 +65,7 @@ const commands = {
       heading: { type: 'string' }, 'heading-level': { type: 'string' },
       text: { type: 'string' }, file: { type: 'string' },
       'at-start': { type: 'boolean' }, 'version-message': { type: 'string' },
-      'dry-run': { type: 'boolean' }, 'show-adf': { type: 'boolean' },
+      'dry-run': { type: 'boolean' }, 'show-adf': { type: 'boolean' }, ...CHECK_OPTIONS,
     },
     async run(v) {
       const id = pageId(v);
@@ -72,13 +76,12 @@ const commands = {
       if (v.heading) nodes.push({ type: 'heading', attrs: { level }, content: adfInline(v.heading) });
       nodes.push(...markdownToAdfContent(text));
       const where = v['at-start'] ? 'start' : 'end';
-      const foreign = nonLatinLetters(`${v.heading || ''}${text}`);
+      checkContent(v, [{ label: 'heading', text: v.heading }, { label: 'section', text }]);
 
       // The preview of an appended section reads nothing from Confluence, so an explicit --dry-run
       // works without credentials.
       const { c, wiki } = client(`append to page ${id}`, { offline: v['dry-run'] });
       if (v['dry-run']) {
-        if (foreign) console.log(`WARNING: non-Latin letters (${foreign}) — documentation is English.`);
         console.log('--- DRY RUN (requested --dry-run) ---');
         console.log(`Page id: ${id}\nSection that WOULD be inserted at the ${where} of the page:`);
         console.log(`${'-'.repeat(40)}\n${v.heading ? `${'#'.repeat(level)} ${v.heading}\n` : ''}${text}\n${'-'.repeat(40)}`);
@@ -145,11 +148,9 @@ function bodyText(v) {
   return text;
 }
 
-function englishOnly(v, ...texts) {
-  const foreign = nonLatinLetters(texts.filter(Boolean).join(' '));
-  if (foreign && !v['allow-non-english']) {
-    throw new UsageError(`Confluence content is English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
-  }
+/** The content check (common/outgoing.mjs) of a write's texts, its --version-message included. */
+function checkContent(v, texts) {
+  guardOutgoing([...texts, { label: 'version message', text: v['version-message'] }], v, outgoingRules());
 }
 
 Object.assign(commands, {
@@ -192,12 +193,12 @@ Object.assign(commands, {
     help: 'create a page (--space KEY, --title, --parent ID|URL, --text|--file markdown, --dry-run)',
     options: {
       space: { type: 'string' }, title: { type: 'string' }, parent: { type: 'string' },
-      text: { type: 'string' }, file: { type: 'string' }, 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' },
+      text: { type: 'string' }, file: { type: 'string' }, 'dry-run': { type: 'boolean' }, ...CHECK_OPTIONS,
     },
     async run(v) {
       if (!v.space || !v.title) throw new UsageError('--space and --title are required');
       const text = bodyText(v);
-      englishOnly(v, v.title, text);
+      checkContent(v, [{ label: 'title', text: v.title }, { label: 'page', text }]);
       const parentId = v.parent ? pageId({ page: v.parent }) : null;
       // The preview of a new page reads nothing from Confluence, so an explicit --dry-run works
       // without credentials.
@@ -222,13 +223,13 @@ Object.assign(commands, {
     options: {
       page: { type: 'string' }, 'page-id': { type: 'string' }, heading: { type: 'string' },
       text: { type: 'string' }, file: { type: 'string' }, 'version-message': { type: 'string' },
-      'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' },
+      'dry-run': { type: 'boolean' }, ...CHECK_OPTIONS,
     },
     async run(v) {
       const id = pageId(v);
       if (!v.heading) throw new UsageError('--heading is required (the exact heading text)');
       const text = bodyText(v);
-      englishOnly(v, text);
+      checkContent(v, [{ label: 'section', text }]);
       // Even the dry run reads the page: it shows the section's current text.
       const { c, wiki } = client(`replace a section of page ${id}`);
       const page = await fetchPage(wiki, id, true);

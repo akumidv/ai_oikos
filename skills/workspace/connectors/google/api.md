@@ -5,7 +5,7 @@ refuse unless the user set `OIKOS_GOOGLE_API=1` (`.local/.env`, or the shell as 
 agent does not suggest it. `logout --yes` works either way.
 
 `tools/google` reads Gmail, Drive and Calendar over Google's REST APIs with the user's own
-sign-in. The token stays on the machine (`.local/google/`, mode 600; the secret guard denies
+sign-in. The token stays on the machine (`.local/.secrets/google/`, mode 600; the secret guard denies
 reading it); nothing is enabled in the Claude cloud. Read-only: nothing is sent, shared, deleted
 or changed at Google — writing goes through the browser route, after confirmation.
 
@@ -21,7 +21,7 @@ what is missing. The account must be the corporate one; `auth` refuses any other
    **Google Drive API**, **Google Calendar API** → OAuth consent screen: **Internal** →
    Credentials → Create credentials → OAuth client ID → **Desktop app** → Download JSON.
    If the organisation does not let people create projects, the Workspace admin gives one.
-2. `node oikos/tools/google/cli.mjs client <downloaded.json>` — copies it into `.local/google/`; the
+2. `node oikos/tools/google/cli.mjs client <downloaded.json>` — copies it into `.local/.secrets/google/`; the
    downloaded file can then be deleted.
 3. **Sign-in** — the user runs `! node oikos/tools/google/cli.mjs auth` (their browser opens; they sign
    in (through the organization's SSO, if any) and allow read access). `--scopes mail,drive` asks for less. With the browser

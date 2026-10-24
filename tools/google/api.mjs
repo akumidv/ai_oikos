@@ -231,7 +231,8 @@ export async function listEvents({ from, to, calendar = 'primary', limit = 100 }
 
 // -- files ----------------------------------------------------------------------------------
 
-export const safeName = (name) => String(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 180) || 'file';
+// oxlint-disable-next-line no-control-regex -- control characters are stripped from file names
+export const safeName =(name) => String(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 180) || 'file';
 
 export function freeName(dir, name) {
   const dot = name.lastIndexOf('.');

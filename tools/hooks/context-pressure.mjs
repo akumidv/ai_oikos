@@ -84,9 +84,10 @@ export function run(payload) {
   writeState(sid, 'context', { band });
 
   const critical = band === BANDS.length - 1;
+  const park = 'park the work package (node oikos/tools/handoff/cli.mjs park --task KEY --from <working files> — .local/<task>/ + HANDOFF.md + its backlog line, see OIKOS.md § Context economy)';
   const advice = critical
-    ? 'critical — save what must survive (vault note, draft, backlog), then /compact or start a fresh session'
-    : 'save what must survive (vault note, draft, backlog), then choose /compact or a fresh session by how much of the current context the task still needs';
+    ? `critical — ${park}, then /compact or start a fresh session`
+    : `${park}, then choose /compact or a fresh session by how much of the current context the task still needs`;
   const line = `⚠ context pressure: ~${Math.round(ratio * 100)}% of ${Math.round(window / 1000)}k (${fill} tokens) — ${advice}`;
   print({
     systemMessage: line,

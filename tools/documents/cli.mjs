@@ -71,7 +71,10 @@ function replaceInParagraph(p, from, to) {
     if (i < 0) return count;
     const j = i + from.length;
     let acc = 0;
-    let si = -1, so = 0, ei = -1, eo = 0;
+    let si = -1;
+    let so = 0;
+    let ei = -1;
+    let eo = 0;
     p.texts.forEach((t, k) => {
       const a = acc;
       acc += t.text.length;

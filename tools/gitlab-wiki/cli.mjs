@@ -10,7 +10,8 @@
 // re-reads the page right before the PUT and prints the hash it applied to.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { runCli, printJson, nonLatinLetters, UsageError } from '../common/cli.mjs';
+import { runCli, printJson, UsageError } from '../common/cli.mjs';
+import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { envValue } from '../common/env.mjs';
 import { gitlabClient, projectPath } from '../common/gitlab.mjs';
 import { HttpError } from '../common/http.mjs';
@@ -128,12 +129,9 @@ function bodyText(v) {
   return text;
 }
 
-/** Wiki content is English unless --allow-non-english. */
-function englishOnly(v, ...texts) {
-  const foreign = nonLatinLetters(texts.filter(Boolean).join(' '));
-  if (foreign && !v['allow-non-english']) {
-    throw new UsageError(`wiki content is English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
-  }
+/** The content check (common/outgoing.mjs) of a write's texts, in its dry run and its real run. */
+function checkContent(v, texts) {
+  guardOutgoing(texts, v, outgoingRules());
 }
 
 const RULE = '-'.repeat(40);
@@ -191,7 +189,7 @@ async function writePage(gl, project, page, content, what) {
 const PAGE_OPTIONS = { project: { type: 'string' }, page: { type: 'string' } };
 const WRITE_OPTIONS = {
   text: { type: 'string' }, file: { type: 'string' },
-  'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' },
+  'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' }, 'allow-flagged': { type: 'boolean' },
 };
 
 const commands = {
@@ -292,7 +290,7 @@ const commands = {
       if (!v.title) throw new UsageError('--title is required');
       if (v.title.includes('/')) throw new UsageError('--title is one name; give the path above it as --parent');
       const text = bodyText(v);
-      englishOnly(v, v.title, text);
+      checkContent(v, [{ label: 'title', text: v.title }, { label: 'page', text }]);
       const gl = client();
       const project = projectFrom(v);
       const pages = await listPages(gl, project);
@@ -334,7 +332,7 @@ const commands = {
     options: { ...PAGE_OPTIONS, heading: { type: 'string' }, 'heading-level': { type: 'string' }, 'at-start': { type: 'boolean' }, ...WRITE_OPTIONS },
     async run(v) {
       const text = bodyText(v);
-      englishOnly(v, v.heading, text);
+      checkContent(v, [{ label: 'heading', text: v.heading }, { label: 'section', text }]);
       const level = Number(v['heading-level'] || 2);
       const atStart = Boolean(v['at-start']);
       const gl = client();
@@ -367,7 +365,7 @@ const commands = {
     async run(v) {
       if (!v.heading) throw new UsageError('--heading is required (the exact heading text)');
       const text = bodyText(v);
-      englishOnly(v, text);
+      checkContent(v, [{ label: 'section', text }]);
       const gl = client();
       const target = await pageForWrite(gl, v);
       if (!target) return 3;

@@ -1,9 +1,10 @@
 // Google sign-in kept on the user's machine. The user's own OAuth client (type
 // "Desktop app", created once in Google Cloud) is imported into the installation's
-// .local/google/client.json; the
-// sign-in runs in the user's browser against a loopback address with PKCE, and the refresh
-// token lands in .local/google/token.json. Both files are mode 600, git-ignored with .local/,
-// and the secret guard denies reading them in the chat. Nothing is enabled in the Claude cloud.
+// .local/.secrets/google/client.json; the sign-in runs in the user's browser against a loopback
+// address with PKCE, and the refresh token lands in .local/.secrets/google/token.json. Both files
+// are mode 600, git-ignored with .local/, and the secret guard denies reading them in the chat. An
+// installation set up before keeps them in .local/google/, used there until `oikos sync` moves
+// them. Nothing is enabled in the Claude cloud.
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync, statSync } from 'node:fs';
@@ -12,13 +13,13 @@ import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { UsageError } from '../common/cli.mjs';
 import { orgEmail, orgEmailLabel, environment } from '../common/env.mjs';
-import { localPath } from '../common/paths.mjs';
+import { localStorePath } from '../common/paths.mjs';
 import { emailDomain } from '../common/config.mjs';
 import { request, HttpError } from '../common/http.mjs';
 import { onPath } from '../common/programs.mjs';
 
 // The installation's sign-in folder; each throws outside an installation.
-export const googleDir = () => localPath('google');
+export const googleDir = () => localStorePath('google');
 export const clientFile = () => join(googleDir(), 'client.json');
 export const tokenFile = () => join(googleDir(), 'token.json');
 

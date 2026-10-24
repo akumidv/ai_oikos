@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "extends": ["./_aitna/akmon/profiles/oxlint.json"],
+  "env": { "node": true, "es2024": true },
+  "rules": {
+    "curly": ["error", "multi-line"],
+    "complexity": ["warn", 10],
+    "max-params": ["warn", 5],
+    "max-statements": ["warn", 50],
+    "max-depth": ["warn", 4]
+  },
+  "ignorePatterns": ["**/node_modules/**", "_aitna/akmon/**", ".claude/**", ".agents/**", ".qwen/**"],
+  "overrides": [
+    {
+      "files": ["extension/**"],
+      "env": { "browser": true, "webextensions": true }
+    }
+  ]
+}

@@ -18,15 +18,21 @@
 // survive it. Its skill pointers carry a marker; its MCP servers are listed in .local/sync.json.
 // The resource notes and the skills' frontmatter are checked, never copied: the overview is
 // computed on request (tools/landscape).
+// In an installation it also moves the stores of `.local/` still at their old places to their
+// dot-named ones (common/local-stores.mjs, ADR 0002): the browser profile only while this
+// installation's Chrome is stopped.
 // `--check` changes nothing and exits 1 on any problem or drift.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { availableParallelism } from 'node:os';
 import { CORE_ROOT } from '../common/env.mjs';
-import { installRoot } from '../common/paths.mjs';
+import { installRoot, INSTALL_FILE } from '../common/paths.mjs';
+import { taskTrackingConflicts } from '../common/transitions.mjs';
 import { loadLandscape } from '../common/landscape.mjs';
 import { config } from '../common/config.mjs';
+import { moveLocalStores } from '../common/local-stores.mjs';
+import { chromeRunning } from '../browser/cli.mjs';
 import { WRITES } from '../hooks/writes.mjs';
 import { HOSTS, hostNames, settingsFile, hooksFor, guardsIn, mergeHooks } from '../hooks/wiring.mjs';
 
@@ -170,6 +176,18 @@ if (INSTALL) {
     write(mcpPath, json({ ...mcp, mcpServers: { ...servers, ...kept } }), '.mcp.json');
     write(statePath, json({ ...state, mcp: Object.keys(servers) }), '.local/sync.json');
   }
+
+  // -- stores of .local/ ------------------------------------------------------------------
+  // A store at its old place is moved to its dot-named one, which the secret guard keeps closed
+  // by name; the old names are closed too, so a store left in place is never open meanwhile.
+  for (const m of await moveLocalStores(INSTALL, { check, browserRunning: () => chromeRunning() })) {
+    const move = `${m.from} → ${m.to}`;
+    if (m.state === 'moved' || m.state === 'out of date') changed.push(move);
+    // A failed move is a problem: the rest of sync runs, and it exits 1 like on any other problem.
+    else if (m.state === 'failed') problems.push(`${move} not moved (${m.error}); it is still used where it is`);
+    else if (m.state === 'running') console.log(`note: ${move} not moved — this installation's Chrome is running; stop it (node oikos/tools/browser/cli.mjs stop) and sync again`);
+    else console.log(`note: ${m.from} left in place — ${m.to} exists too and is the one used; remove ${m.from} once nothing in it is needed`);
+  }
 }
 
 // -- hook files ---------------------------------------------------------------------------
@@ -257,6 +275,8 @@ for (const [i, tool] of runCliTools.entries()) {
 }
 
 for (const p of problems) console.log(`problem: ${p}`);
+// A rule that contradicts the organization's tracker policy is a warning, not a problem (ADR 0004 D02).
+for (const w of taskTrackingConflicts(config()['task-tracking'])) console.log(`warning: ${INSTALL_FILE}: ${w}`);
 for (const c of changed) console.log(`${check ? 'out of date' : 'wrote'}: ${c}`);
 console.log(`${skills.length} skill(s), ${resources.length} resource(s), ${problems.length} problem(s), ${changed.length} ${check ? 'out of date' : 'change(s)'}`);
 process.exit(problems.length || (check && changed.length) ? 1 : 0);

@@ -56,7 +56,6 @@ const issue = (n, extra = {}) => ({
 });
 const issueRoute = (n, extra) => ({ url: `${API}/repos/acme-corp/tools/issues/${n}`, body: issue(n, extra) });
 const labelsRoute = (...names) => ({ url: `${API}/repos/acme-corp/tools/labels?per_page=100`, body: names.map((name) => ({ name })) });
-const RELATIONS = { graphql: 'OikosIssueRelations', body: { data: { repository: { issue: { parent: null, subIssues: { totalCount: 0, nodes: [] }, blockedBy: { nodes: [] }, blocking: { nodes: [] } } } } } };
 
 // Iterations relative to today, so the active one stays active.
 const day = (offset) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
@@ -84,7 +83,7 @@ const itemsRoute = (n, values) => ({
     projectItems: { nodes: values ? [{ id: `PVTI_${n}`, project: { id: 'PVT_1', number: 3 }, fieldValues: { nodes: values } }] : [] },
   } } } },
 });
-const MUTATION_OK = (name, data) => ({ graphql: name, body: { data } });
+const mutationOk = (name, data) => ({ graphql: name, body: { data } });
 
 // == pure helpers ===============================================================================
 
@@ -257,9 +256,17 @@ test('comment: the dry run reads, a public repository needs GITHUB_PUBLIC_REPOS,
 
 test('comment refuses non-Latin text unless --allow-non-english', () => {
   const dir = installation(withIssues());
-  const r = run(dir, [], ['comment', '--task', '#12', '--text', 'Готово', '--dry-run']);
-  assert.equal(r.status, 1, r.output);
-  assert.match(r.stderr, /--allow-non-english/);
+  const routes = [repo(), issueRoute(12)];
+  const r = run(dir, routes, ['comment', '--task', '#12', '--text', 'Готово', '--dry-run']);
+  assert.equal(r.status, 3, r.output);
+  assert.match(r.stderr, /^flagged: content check: language .*--allow-non-english/);
+  assert.match(r.stdout, /Comment that WOULD be posted/);
+  const refused = run(dir, [], ['comment', '--task', '#12', '--text', 'Готово']);
+  assert.equal(refused.status, 3, refused.output);
+  assert.match(refused.stderr, /^refused: content check: language/);
+  const allowed = run(dir, routes, ['comment', '--task', '#12', '--text', 'Готово', '--dry-run', '--allow-non-english']);
+  assert.equal(allowed.status, 0, allowed.output);
+  assert.match(allowed.stdout, /comment line 1: language — .* \(overridden\)/);
 });
 
 // == transition =================================================================================
@@ -300,7 +307,7 @@ test('transition refuses review, closing and moves from review on — exit 3 wit
 
 test('transition with GITHUB_PROJECT sets the Status field; the dry run sends no mutation', () => {
   const dir = installation(withIssues({ GITHUB_PROJECT: 3 }));
-  const routes = [repo(), issueRoute(12), PROJECT, itemsRoute(12, [statusValue('Todo')]), MUTATION_OK('OikosSetField', { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_12' } } })];
+  const routes = [repo(), issueRoute(12), PROJECT, itemsRoute(12, [statusValue('Todo')]), mutationOk('OikosSetField', { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_12' } } })];
   const dry = run(dir, routes, ['transition', '--task', '#12', '--to', 'In Progress', '--dry-run']);
   assertDryRun(dry);
   assert.ok(dry.calls.some((c) => isGraphql(c)), 'the dry run read the project');
@@ -388,8 +395,8 @@ test('edit: --max caps a query, status labels and --state are refused, the write
 test('move-to-sprint: an issue outside the project needs --add-to-project; the write adds it and sets the iteration', () => {
   const dir = installation(withIssues({ GITHUB_PROJECT: 3 }));
   const routes = [repo(), PROJECT, itemsRoute(12, null),
-    MUTATION_OK('OikosAddItem', { addProjectV2ItemById: { item: { id: 'PVTI_new' } } }),
-    MUTATION_OK('OikosSetField', { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_new' } } })];
+    mutationOk('OikosAddItem', { addProjectV2ItemById: { item: { id: 'PVTI_new' } } }),
+    mutationOk('OikosSetField', { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_new' } } })];
   assertRefused(run(dir, routes, ['move-to-sprint', '--sprint', 'Sprint 5', '--task', '#12', '--dry-run']), /not in project 3 "Roadmap" — pass --add-to-project/);
   const args = ['move-to-sprint', '--sprint', 'Sprint 5', '--task', '#12', '--add-to-project'];
   const dry = run(dir, routes, [...args, '--dry-run']);
@@ -407,7 +414,7 @@ test('move-to-sprint: an issue outside the project needs --add-to-project; the w
 
 test('move-to-sprint --backlog clears the iteration; a closed iteration is refused', () => {
   const dir = installation(withIssues({ GITHUB_PROJECT: 3 }));
-  const routes = [repo(), PROJECT, itemsRoute(12, [iterationValue('it5', 'Sprint 5')]), MUTATION_OK('OikosClearField', { clearProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_12' } } })];
+  const routes = [repo(), PROJECT, itemsRoute(12, [iterationValue('it5', 'Sprint 5')]), mutationOk('OikosClearField', { clearProjectV2ItemFieldValue: { projectV2Item: { id: 'PVTI_12' } } })];
   const dry = run(dir, routes, ['move-to-sprint', '--backlog', '--task', '#12', '--dry-run']);
   assertDryRun(dry);
   assert.match(dry.stdout, /\["Sprint 5" → backlog\]/);

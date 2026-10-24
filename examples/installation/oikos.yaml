@@ -14,3 +14,33 @@ settings:
 
 mcp_servers:
   knowledge: { type: http, url: https://kb.example.com/mcp }
+
+# Who may move a task between two statuses (ADR 0001; skills/task-tracking/connectors/jira.md).
+# Without it the tracker keeps JIRA_AGENT_STATUSES. Left commented so the tests start from that.
+# task-tracking:
+#   jira:
+#     defaults:
+#       default: person
+#       transitions:
+#         - { from: [To Do, In Progress, Blocked], to: [To Do, In Progress, Blocked], mode: agent }   # only among the working statuses
+#         - { from: In Progress, to: Review, mode: confirm, requires: "The task shows where its result is." }
+#         - { from: Review, to: [Test, Done], mode: confirm, requires: "The task shows where its result is; it belongs to an epic." }
+#         - { from: "*", to: Closed, mode: confirm, requires: A comment giving the reason for closing. }
+#       # The organization's policy (ADR 0004): only a person moves a task into or out of these statuses;
+#       # `source` is the page it comes from, printed, never fetched. With it, every rule above into or
+#       # out of Review — "*" → Closed too, which covers Review → Closed — is refused as person: write
+#       # them as `mode: person`, and put { from: Review, to: "*", mode: person } before "*" → Closed.
+#       # policy:
+#       #   person_only: [Review]
+#       #   source: https://kb.example.com/tracker-rules
+#       number_patterns: ["FIX[{n}]"]  # how a bare task number is written (a project's own list replaces it)
+#     projects:                       # a block is set up by `jira project-init PROJ --dry-run` / `jira repos add`
+#       PROJ:
+#         key_aliases: [PJ]
+#         repos: [github:acme-corp/web-ui, gitlab:acme/backend]
+#         extended_repos: [github:acme-corp/legacy-ui]   # PRs possible but rare: searched only with --extended
+#         number_repos: [github:acme-corp/web-ui]        # here a bare FIX[123] is PROJ-123
+#         results: Pull requests; UI changes also as screenshots in the attachments.
+#         epic_roles: { fixes: PROJ-10, features: PROJ-11 }   # general epics by role
+#         epic_projects: [PLAN]                          # whose open epics are candidates too
+#         epics: A subject epic first; else bugs to fixes, the rest to features.

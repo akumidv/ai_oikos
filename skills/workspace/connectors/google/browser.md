@@ -1,7 +1,7 @@
 # Route: Google in the shared browser
 
 Gmail, Drive, Docs/Sheets/Slides and Calendar in the oikos Chrome (skill `browser`). The user
-signs in once in that window; the session stays in the profile under `.local/browser/`.
+signs in once in that window; the session stays in the profile under `.local/.browser/`.
 Nothing is enabled in the Claude cloud and no token is kept.
 
 ## Start

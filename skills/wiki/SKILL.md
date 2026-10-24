@@ -4,6 +4,7 @@ description: Find, read, create and edit the organization's wiki pages — searc
 when_to_use: When a specific wiki page has to be found, read as it is now, created or changed.
 metadata:
   owner: oikos
+  group: collaboration
 surface: the organization's wiki pages — search, read, create, append, replace a section; writes after a confirmed dry run
 connectors: confluence, github-wiki, gitlab-wiki
 refuses: deleting, moving or re-permissioning pages, editing inside a paragraph, and fetching the wiki with a web-fetch tool

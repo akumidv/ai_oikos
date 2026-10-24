@@ -3,7 +3,7 @@
 // Without a token: `drive` finds the Google Drive for desktop folder in this environment; `link`
 // reads a Drive link file (.gdoc, .gsheet, …: a small JSON, not the content) and gives the
 // document's id and the URLs to open or export it in the shared browser.
-// With the user's own sign-in (auth.mjs: their OAuth client, the token in .local/google/):
+// With the user's own sign-in (auth.mjs: their OAuth client, the token in .local/.secrets/google/):
 // read-only Gmail, Drive and Calendar over the REST APIs (api.mjs). Mail also works without it,
 // over IMAP with a Google app password (mail.mjs), the way a mail client reads it; that route
 // wins when GMAIL_APP_PASSWORD is set. The API route needs an OAuth
@@ -238,7 +238,7 @@ function mailRoute() {
 
 const api = {
   client: {
-    help: 'import the user\'s OAuth client (Desktop app JSON from Google Cloud) into .local/google/; --yes replaces one',
+    help: 'import the user\'s OAuth client (Desktop app JSON from Google Cloud) into .local/.secrets/google/; --yes replaces one',
     options: { yes: { type: 'boolean' } },
     async run(v, [src]) {
       if (!src) throw new UsageError('the downloaded client JSON is required: client <client_secret_….json>');

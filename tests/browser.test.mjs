@@ -23,6 +23,7 @@ const line = (profile, port = 9312) => `/opt/google/chrome/chrome --remote-debug
 
 test('an oikos profile path names its installation, on every side', () => {
   assert.equal(profileInstallation(OURS), 'acme');
+  assert.equal(profileInstallation(`${ROOT}/.local/.browser/chrome-profile`), 'acme', 'the store at its place since ADR 0002');
   assert.equal(profileInstallation('/Users/user/globex/.local/browser/chrome-profile-project'), 'globex');
   assert.equal(profileInstallation('\\\\wsl.localhost\\Ubuntu\\home\\user\\globex\\.local\\browser\\chrome-profile'), 'globex');
   assert.equal(profileInstallation('C:\\Users\\user\\AppData\\Local\\Google\\Chrome\\User Data'), null);
@@ -31,6 +32,7 @@ test('an oikos profile path names its installation, on every side', () => {
 
 test('whose a Chrome is: this installation, another one by its code, or one oikos did not start', () => {
   assert.deepEqual(chromeOwnership([line(OURS)], { root: ROOT }), { owner: 'ours', installation: 'acme' });
+  assert.deepEqual(chromeOwnership([line(`${ROOT}/.local/.browser/chrome-profile`)], { root: ROOT }), { owner: 'ours', installation: 'acme' });
   // A Windows Chrome under WSL: the profile as Windows sees it, recorded at `start` in launch.json.
   const windows = '\\\\wsl.localhost\\Ubuntu\\home\\user\\work\\acme\\.local\\browser\\chrome-profile';
   const quoted = `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9312 --user-data-dir="${windows.toUpperCase()}"`;

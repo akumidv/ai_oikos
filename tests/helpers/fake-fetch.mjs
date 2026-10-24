@@ -5,6 +5,7 @@
 //   match    a regular expression source tested against the URL
 //   graphql  a substring of the GraphQL query (e.g. the operation name): matches a POST to a URL
 //            ending in /graphql whose JSON `query` contains it
+//   variables optional with `graphql`: an object whose every entry the call's variables equal
 //   status, headers, body   the answer (body: JSON or a string)
 //   times    optional: the route answers this many calls, then no longer matches
 // The first matching route wins. Every call is appended to OIKOS_FAKE_FETCH_LOG as one JSON line
@@ -24,6 +25,7 @@ function matches(route, method, url, body) {
   if (route.graphql !== undefined) {
     if (method !== (route.method || 'POST').toUpperCase() || !/\/graphql$/.test(url)) return false;
     if (route.url !== undefined && route.url !== url) return false;
+    if (route.variables && !Object.entries(route.variables).every(([k, v]) => body?.variables?.[k] === v)) return false;
     return typeof body?.query === 'string' && body.query.includes(route.graphql);
   }
   if (method !== (route.method || 'GET').toUpperCase()) return false;

@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 // GitLab (GITLAB_URL): projects, merge requests, pipelines, job logs, files, and where a
 // Jira task's code lives — for work that is not sitting in a checkout: the project is always named (--project group/name).
-// Every command is a read.
+// Every command is a read; governance and merged read what guards a project and how its merge
+// requests were merged (governance.mjs).
 import { runCli, required, printJson, UsageError } from '../common/cli.mjs';
 import { gitlabClient, projectPath as proj } from '../common/gitlab.mjs';
+import { isDate, mergeLine, mergeTotals, totalsLine } from '../common/governance.mjs';
+import { gitlabGovernance, gitlabGovernanceLines, gitlabMerged } from './governance.mjs';
 
 const TAIL_LINES = 40;
+const MERGED_LIMIT = 200;
 // Broad on purpose: a missed error line costs a second command, a spurious one costs a line.
 const ERROR_RE = /\b(error|fatal|failed|failure|traceback|exception|assert|panic|denied|refused|timeout)\b|^\s*E\s{2,}|##\[error\]/i;
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+// oxlint-disable-next-line no-control-regex -- an ANSI escape starts with ESC
+const ANSI_RE =/\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 // A task key matches only as a whole token: PROJ-123 never matches PROJ-1234 or XPROJ-123.
 const wholeToken = (key, text) => Boolean(text) && new RegExp(`(?<![A-Za-z0-9-])${key.replace(/[-]/g, '\\-')}(?![A-Za-z0-9-])`).test(text);
 
@@ -65,15 +70,17 @@ const commands = {
   },
 
   mrs: {
-    help: 'merge requests (--project or --group, else all visible; --state opened|merged|closed|all, --author/--reviewer/--assignee username|me, --limit)',
+    help: 'merge requests (--project or --group, else all visible; --state opened|merged|closed|all, --author/--reviewer/--assignee username|me, --since YYYY-MM-DD updated since, --limit)',
     options: {
       project: { type: 'string' }, group: { type: 'string' }, state: { type: 'string' },
       author: { type: 'string' }, reviewer: { type: 'string' }, assignee: { type: 'string' },
-      search: { type: 'string' }, limit: { type: 'string' },
+      search: { type: 'string' }, since: { type: 'string' }, limit: { type: 'string' },
     },
     async run(v) {
+      if (v.since !== undefined && !isDate(v.since)) throw new UsageError(`--since is not a date YYYY-MM-DD: ${v.since}`);
       const g = gl();
       const q = new URLSearchParams({ state: v.state || 'opened', order_by: 'updated_at' });
+      if (v.since) q.set('updated_after', `${v.since}T00:00:00Z`);
       // "me" is the owner of GITLAB_TOKEN.
       let meName;
       const user = async (u) => (u === 'me' ? (meName ??= (await g.get('/user')).username) : u);
@@ -88,6 +95,32 @@ const commands = {
       if (v.json) return printJson(rows);
       for (const mr of rows) console.log(mrLine(mr));
       console.log(`${rows.length} merge request(s)`);
+    },
+  },
+
+  governance: {
+    help: 'what guards a project (--project): merge checks, protected branches, approval settings and rules, CODEOWNERS',
+    options: { project: { type: 'string' } },
+    async run(v) {
+      required(v, 'project');
+      const gov = await gitlabGovernance(gl(), v.project);
+      if (v.json) return printJson(gov);
+      for (const line of gitlabGovernanceLines(gov)) console.log(line);
+    },
+  },
+
+  merged: {
+    help: 'merge requests merged since a date (--project, --since YYYY-MM-DD, --limit default 200, --notes): author, merger, approvals, open→merge time, totals',
+    options: { project: { type: 'string' }, since: { type: 'string' }, limit: { type: 'string' }, notes: { type: 'boolean' } },
+    async run(v) {
+      required(v, 'project', 'since');
+      if (!isDate(v.since)) throw new UsageError(`--since is not a date YYYY-MM-DD: ${v.since}`);
+      const found = await gitlabMerged(gl(), v.project, v.since, { limit: Number(v.limit || MERGED_LIMIT), notes: Boolean(v.notes) });
+      const totals = mergeTotals(found.records);
+      if (v.json) return printJson({ project: v.project, since: v.since, totals, truncated: found.truncated, mergeRequests: found.mergeRequests });
+      for (const r of found.records) console.log(mergeLine(r));
+      console.log(`gitlab:${v.project} since ${v.since}: ${totalsLine(totals)}`);
+      if (found.truncated) console.log('# the --limit of merge requests updated since was reached — raise it for the rest');
     },
   },
 

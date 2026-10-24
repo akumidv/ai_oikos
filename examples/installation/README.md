@@ -8,10 +8,11 @@ skeleton plus `.local/` and runs sync.
 ```
 AGENTS.md        @oikos/OIKOS.md + @.local/AGENTS.md + the organization's rules
 CLAUDE.md        @AGENTS.md
-oikos.yaml       organization, connectors, settings, mcp_servers, brand
+oikos.yaml       organization, connectors, settings, mcp_servers, brand, task-tracking (commented example)
 resources/       one note per resource
 LANDSCAPE.md     the way in and sign-in
-.local/          git-ignored: AGENTS.md (this machine's paths), .env, catalog.yaml, browser/, google/
+.local/          git-ignored: AGENTS.md (this machine's paths), catalog.yaml, working material;
+                 closed stores under dot names: .env, .secrets/ (sign-ins), .browser/ (the profile)
 .claude/ .qwen/ .mcp.json   written by sync
 oikos -> ../<core checkout>
 ```

@@ -55,7 +55,9 @@ in their language; everything written stays in English.
      is asked for, only once it is listed; a skill left out uses none
      (`node oikos/tools/landscape/cli.mjs skills` lists them), the site settings (`JIRA_BASE_URL`,
      `GITLAB_URL`, `GITHUB_ORG`, …), the organization's MCP servers (a knowledge base). Then
-     `node oikos/tools/sync/cli.mjs` writes `.mcp.json`.
+     `node oikos/tools/sync/cli.mjs` writes `.mcp.json`. Optionally `task-tracking`: who may
+     move a task between which statuses, and what a project's results are (the example in
+     `oikos/examples/installation/oikos.yaml`; the shape in the tracker's connector file).
    - `AGENTS.md`: where the knowledge base is, where drafts and final documents go, the brand
      skill for on-brand documents, the SSO. `.local/AGENTS.md`: this machine's paths (the vault,
      the personal memory note) as `- key: value` lines.
@@ -113,7 +115,10 @@ git -C <oikos> pull --ff-only && npm --prefix <oikos> install
 Then, in each installation: `node oikos/tools/sync/cli.mjs && node oikos/tools/sync/cli.mjs --check`,
 and start a new session there (hooks and settings are read at start); for Qwen, approve the MCP
 servers again when sync reports `.mcp.json` changed (Set up, step 8). An installation's own files
-and `.local/` are untouched by an update; sync rewrites only oikos's own entries in the wiring.
+and `.local/` are untouched by an update; sync rewrites only oikos's own entries in the wiring, and
+moves a store of `.local/` still at an old place to its dot-named one (`google/` →
+`.secrets/google/`, `browser/` → `.browser/` — the browser profile only while its Chrome is
+stopped: `node oikos/tools/browser/cli.mjs stop`, then sync again).
 `setup status` shows whether an update added something to set up.
 
 ## Remove

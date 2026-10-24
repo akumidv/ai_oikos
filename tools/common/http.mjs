@@ -9,11 +9,13 @@ const CONTACT = '+oikos';
 const TIMEOUT_MS = 30_000;
 
 export class HttpError extends Error {
-  constructor(status, url, body) {
+  /** `headers` are the answer's (a Headers), where a caller needs one — retry-after on a rate limit. */
+  constructor(status, url, body, headers = null) {
     super(`HTTP ${status} from ${url}: ${String(body).slice(0, 300)}`);
     this.status = status;
     this.url = url;
     this.body = body;
+    this.headers = headers;
   }
 }
 
@@ -32,16 +34,20 @@ function proxyHint() {
 /**
  * fetch with the tool's User-Agent, a timeout and uniform errors.
  * Returns { status, headers, data } where data is parsed JSON, text or a Buffer (`as: 'buffer'`).
+ * A Buffer `body` is sent as is, under the Content-Type the caller sets (a multipart upload);
+ * `redirect: 'manual'` answers a 3xx itself instead of following it (its Location is the answer).
  */
-export async function request(url, { tool, method = 'GET', headers = {}, body, as = 'json' } = {}) {
+export async function request(url, { tool, method = 'GET', headers = {}, body, as = 'json', redirect = 'follow' } = {}) {
   const init = {
     method,
+    redirect,
     headers: { 'User-Agent': userAgent(tool), Accept: 'application/json', ...headers },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   };
   if (body !== undefined) {
-    init.body = typeof body === 'string' ? body : JSON.stringify(body);
-    init.headers['Content-Type'] ??= 'application/json';
+    const binary = body instanceof Uint8Array;
+    init.body = typeof body === 'string' || binary ? body : JSON.stringify(body);
+    if (!binary) init.headers['Content-Type'] ??= 'application/json';
   }
   let res;
   try {
@@ -51,6 +57,8 @@ export async function request(url, { tool, method = 'GET', headers = {}, body, a
     throw new ChannelError(
       `no channel to ${host} from this machine (${e.cause?.code || e.name}). ` +
         `An internal host needs the organization's channel: check the proxy/VPN/WARP, not the service.${proxyHint()}`,
+      // The cause tells a timeout (TimeoutError: the host is reachable but slow) from no channel at all.
+      { cause: e },
     );
   }
   if (/cloudflareaccess\.com/.test(res.url)) {
@@ -59,12 +67,13 @@ export async function request(url, { tool, method = 'GET', headers = {}, body, a
         `go through the corporate channel (proxy/VPN/WARP).${proxyHint()}`,
     );
   }
-  if (!res.ok) {
+  const redirected = redirect === 'manual' && res.status >= 300 && res.status < 400;
+  if (!res.ok && !redirected) {
     const text = await res.text();
     if (res.status === 403 && /error code:?\s*1010|cloudflare/i.test(text)) {
       throw new HttpError(403, url, 'Cloudflare edge ban (1010) on the User-Agent, not a rejected token');
     }
-    throw new HttpError(res.status, url, text);
+    throw new HttpError(res.status, url, text, res.headers);
   }
   let data;
   if (as === 'buffer') data = Buffer.from(await res.arrayBuffer());

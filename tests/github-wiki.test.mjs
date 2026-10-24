@@ -348,9 +348,12 @@ test('a write to a page that is not markdown is refused (exit 3)', () => {
 test('non-English text is refused without --allow-non-english', () => {
   const f = fixture();
   const r = wiki(f, ['append', '--page', 'Home', '--text', 'Привет', '--dry-run']);
-  assert.equal(r.status, 1, r.output);
-  assert.match(r.stderr, /non-Latin letters.*--allow-non-english/);
-  assert.deepEqual(r.calls, []);
+  assert.equal(r.status, 3, r.output);
+  assert.match(r.stderr, /^flagged: content check: language .*--allow-non-english/);
+  const refused = wiki(f, ['append', '--page', 'Home', '--text', 'Привет']);
+  assert.equal(refused.status, 3, refused.output);
+  assert.match(refused.stderr, /^refused: content check: language/);
+  assert.deepEqual(refused.calls, []);
   const ok = wiki(f, ['append', '--page', 'Home', '--text', 'Привет', '--dry-run', '--allow-non-english']);
   assert.equal(ok.status, 0, ok.output);
 });

@@ -1,10 +1,11 @@
 ---
 name: code-hosting
-description: Read the organization's code hosting without a checkout — repositories and projects, the files in them, open merge or pull requests across a group or the whole instance, pipelines and failed job logs, and which merge requests carry a task key. One skill for every code host; the connector (GitLab, GitHub) comes from the installation's configuration or the user's words. Triggers on "which MRs are open", "my merge requests", "what do I need to review", "what is waiting for review", "where is the code for PROJ-123", "why did the pipeline fail", "which repositories do we have", "show the README of", "list the files of", or a pasted GitLab or GitHub URL.
+description: Read the organization's code hosting without a checkout — repositories and projects, the files in them, open merge or pull requests across a group or the whole instance, pipelines and failed job logs, and which merge requests carry a task key. One skill for every code host; the connector (GitLab, GitHub) comes from the installation's configuration or the user's words. Triggers on "which MRs are open", "my merge requests", "what do I need to review", "what is waiting for review", "where is the code for PROJ-123", "why did the pipeline fail", "which repositories do we have", "show the README of", "list the files of", "is main protected", "branch protection", "who are the code owners", "who merged", "time to merge", "are merges reviewed", or a pasted GitLab or GitHub URL.
 when_to_use: Whenever a question is about repositories, their files, merge or pull requests, or pipelines on a code host.
 metadata:
   owner: oikos
-surface: the organization's code hosts — projects and repositories, files, merge requests, pipelines and job logs; read-only
+  group: engineering
+surface: the organization's code hosts — projects and repositories, files, merge requests, pipelines and job logs, branch protection, approval rules and CODEOWNERS, merged requests with their approvals; read-only
 connectors: gitlab, github
 refuses: any write (merge, approve, comment, rerun, push), managing repositories, members or settings, and calling a host's CLI or curl directly instead of the connector's tool
 ---
@@ -25,8 +26,8 @@ Then read the connector's file and drive its tool as it says.
 
 | Connector | Reaches | Read |
 |---|---|---|
-| gitlab | projects, merge requests, pipelines, job logs, files, task keys in MRs | [connectors/gitlab.md](connectors/gitlab.md) |
-| github | an organization's repositories and their files | [connectors/github.md](connectors/github.md) |
+| gitlab | projects, merge requests, pipelines, job logs, files, task keys in MRs; governance and merged MRs | [connectors/gitlab.md](connectors/gitlab.md) |
+| github | an organization's repositories and their files; a pull request by URL, and those of a task key in named repositories; governance and merged PRs | [connectors/github.md](connectors/github.md) |
 
 A connector the installation does not use is not tried; if the question needs one, say so and
 point at `node oikos/tools/setup/cli.mjs status`.
@@ -36,3 +37,6 @@ point at `node oikos/tools/setup/cli.mjs status`.
 - "Me" is the owner of the connector's token (`whoami`).
 - A 404 means "not found or no access" — access is granted per person; say which.
 - A red pipeline: report the job, the stage and the quoted error line — not the log.
+- Governance ("is main protected", "who must approve", "who merged what, how fast"): the
+  connector's `governance` and `merged`. A part the token cannot read (admin, Maintainer, a paid
+  tier) is reported as unread with what it needs — never as "no protection" or "no rule".

@@ -48,7 +48,7 @@ async function connect() {
     if (['ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(e.code)) {
       throw new UsageError(`no channel to ${HOST}:${PORT} (${e.code}): check the network or proxy, or use the browser route`);
     }
-    throw new Error(`IMAP: ${e.responseText || e.message}`);
+    throw new Error(`IMAP: ${e.responseText || e.message}`, { cause: e });
   }
   return { client, user };
 }
@@ -107,7 +107,7 @@ async function parsed(client, uid) {
   };
 }
 
-const bare = ({ attachments, ...m }) => ({ ...m, attachments: attachments.map(({ content, ...a }) => a) });
+const bare = ({ attachments, ...m }) => ({ ...m, attachments: attachments.map(({ content: _content, ...a }) => a) });
 
 async function uidOfMessage(client, id) {
   if (!/^\d+$/.test(String(id))) throw new UsageError('a Gmail message id is a number (the id column of `mail`)');

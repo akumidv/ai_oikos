@@ -244,3 +244,28 @@ test('the leak check finds a private term staged in a repository', async () => {
   assert.deepEqual(findLeaks(repo, ['initech']), [{ file: 'notes.md', line: 2, term: 'initech' }]);
   assert.deepEqual(findLeaks(repo, ['globex']), []);
 });
+
+test('sync moves the Google sign-in to .local/.secrets/google; a check reports it first', () => {
+  const dir = installation();
+  const old = join(dir, '.local', 'google');
+  mkdirSync(old);
+  writeFileSync(join(old, 'token.json'), '{"token":"fake"}\n');
+  const check = tool(dir, 'sync', ['--check']);
+  assert.match(check.stdout, /out of date: \.local\/google → \.local\/\.secrets\/google/);
+  assert.ok(existsSync(join(old, 'token.json')), 'a check moves nothing');
+  const sync = tool(dir, 'sync', []);
+  assert.equal(sync.status, 0, sync.stdout + sync.stderr);
+  assert.ok(existsSync(join(dir, '.local', '.secrets', 'google', 'token.json')));
+  assert.ok(!existsSync(old));
+});
+
+test('a store sync cannot move is a problem, and the rest of sync still runs', () => {
+  const dir = installation();
+  mkdirSync(join(dir, '.local', 'google'));
+  writeFileSync(join(dir, '.local', '.secrets'), 'a file where the folder goes\n');
+  const sync = tool(dir, 'sync', []);
+  assert.equal(sync.status, 1, sync.stdout + sync.stderr);
+  assert.match(sync.stdout, /problem: \.local\/google → \.local\/\.secrets\/google not moved \(E[A-Z]+: /);
+  assert.ok(existsSync(join(dir, '.local', 'google')));
+  assert.ok(existsSync(join(dir, '.claude', 'settings.json')), 'the wiring is written all the same');
+});

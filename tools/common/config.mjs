@@ -11,10 +11,12 @@
 //   settings: { JIRA_BASE_URL: https://acme.atlassian.net, GITLAB_URL: https://gitlab.acme.example }
 //   mcp_servers: { knowledge: { type: http, url: https://kb.acme.example/mcp } }
 //   brand: { palette: { accent: 1F4E79 }, fonts: { body: { name: Inter, file: fonts/Inter.ttf } } }   # tools/documents
+//   task-tracking: { jira: { defaults: { default: person, transitions: [ … ] }, projects: { PROJ: { … } } } }   # transitions.mjs
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { installRoot, INSTALL_FILE } from './paths.mjs';
+import { taskTrackingProblems } from './transitions.mjs';
 
 /** The installation's `oikos.yaml`, or null outside an installation. */
 export const configFile = () => (installRoot() ? join(installRoot(), INSTALL_FILE) : null);
@@ -22,7 +24,11 @@ export const configFile = () => (installRoot() ? join(installRoot(), INSTALL_FIL
 const isMap = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
 let cached;
-/** { organization, connectors, settings, mcp_servers, brand, problems } — every part present, maybe empty. */
+/**
+ * { organization, connectors, settings, mcp_servers, brand, 'task-tracking', problems } — every part
+ * present, maybe empty. A malformed `task-tracking` part is kept as written; its problems, each
+ * with its path, are in `problems`.
+ */
 export function config() {
   if (cached) return cached;
   const problems = [];
@@ -45,7 +51,12 @@ export function config() {
   for (const [skill, list] of Object.entries(part('connectors'))) {
     connectors[skill] = (Array.isArray(list) ? list : String(list ?? '').split(',')).map((c) => String(c).trim()).filter(Boolean);
   }
-  cached = { organization: part('organization'), connectors, settings: part('settings'), mcp_servers: part('mcp_servers'), brand: part('brand'), problems };
+  const taskTracking = part('task-tracking');
+  problems.push(...taskTrackingProblems(taskTracking).map((p) => `${INSTALL_FILE}: ${p}`));
+  cached = {
+    organization: part('organization'), connectors, settings: part('settings'), mcp_servers: part('mcp_servers'), brand: part('brand'),
+    'task-tracking': taskTracking, problems,
+  };
   return cached;
 }
 

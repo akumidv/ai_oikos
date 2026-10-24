@@ -221,9 +221,12 @@ test('writes to a page in another format than markdown are refused (exit 3), dry
 });
 
 test('non-English content is refused unless --allow-non-english', () => {
-  const refused = run(['append', '--page', 'Home', '--text', 'Привет', '--dry-run']);
-  assert.equal(refused.status, 1, refused.output);
-  assert.match(refused.stderr, /wiki content is English, found non-Latin letters/);
+  const flagged = run(['append', '--page', 'Home', '--text', 'Привет', '--dry-run']);
+  assert.equal(flagged.status, 3, flagged.output);
+  assert.match(flagged.stderr, /^flagged: content check: language/);
+  const refused = run(['append', '--page', 'Home', '--text', 'Привет']);
+  assert.equal(refused.status, 3, refused.output);
+  assert.match(refused.stderr, /^refused: content check: language/);
   assert.equal(refused.calls.length, 0);
   const allowed = run(['append', '--page', 'Home', '--text', 'Привет', '--dry-run', '--allow-non-english']);
   assert.equal(allowed.status, 0, allowed.output);

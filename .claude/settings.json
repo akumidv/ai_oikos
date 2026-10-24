@@ -14,11 +14,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/session-start-agent.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/session-start-agent.mjs\""
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/model-routing.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/model-routing.mjs\""
           }
         ]
       }
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/model-routing.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/model-routing.mjs\""
           }
         ]
       }
@@ -90,7 +90,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/git-commit-guard.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/git-commit-guard.mjs\""
           }
         ]
       },
@@ -99,11 +99,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/role-on-code.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/role-on-code.mjs\""
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/analysis-guard.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/analysis-guard.mjs\""
           }
         ]
       },
@@ -112,7 +112,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/delegation-log.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/delegation-log.mjs\""
           }
         ]
       },
@@ -121,7 +121,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/delegation-nudge.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/delegation-nudge.mjs\""
           }
         ]
       }
@@ -131,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/_aitna/akmon/hooks/gate-audit.py\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/gate-audit.mjs\""
           }
         ]
       }

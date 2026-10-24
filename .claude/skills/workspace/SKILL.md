@@ -5,6 +5,7 @@ description: Work with the organization's mail, files and calendar — search an
 when_to_use: Whenever a question is about work mail, shared-drive files or the calendar.
 metadata:
   owner: oikos
+  group: collaboration
 surface: the organization's mail, drive and calendar — in the shared browser, over IMAP, through the local drive folder, or a claude.ai connector
 connectors: google
 refuses: sending mail, sharing or deleting files, and creating, changing or answering calendar events without the user's explicit confirmation of the exact content; using a personal account; typing passwords or MFA codes

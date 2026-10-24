@@ -4,6 +4,7 @@ description: The user's local catalog of counterparties and domains, with tags, 
 when_to_use: Before searching the user's local folders for a counterparty's or a domain's documents, and after a task that found where such materials live.
 metadata:
   owner: oikos
+  group: files
 surface: .local/catalog.yaml — named roots, domains and counterparties with their folders, files and notes; lists the files in those folders
 refuses: storing document contents, requisites copied out of documents or secrets in the catalog (it holds where things are, not what they say), and searching the whole disk when the catalog does not know an entry (ask the user where the materials are instead)
 ---

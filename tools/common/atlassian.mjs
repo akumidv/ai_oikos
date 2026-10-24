@@ -39,8 +39,8 @@ export function atlassianClient(c, tool) {
       tool,
       method,
       body,
-      headers: { Authorization: auth },
       ...opts,
+      headers: { Authorization: auth, ...opts.headers },
     });
   return {
     get: (path, opts) => call('GET', path, undefined, opts).then((r) => r.data),

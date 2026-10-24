@@ -341,8 +341,13 @@ test('create: dry run GET only; the write posts title, labels, milestone; non-En
   assert.match(real.r.stdout, /^Created acme-corp\/tools#40/m);
 
   const foreign = run(dir, ['create', '--summary', 'Добавить экспорт', '--dry-run'], routes);
-  assert.equal(foreign.r.status, 1, foreign.r.output);
-  assert.match(foreign.r.stderr, /non-Latin letters/);
+  assert.equal(foreign.r.status, 3, foreign.r.output);
+  assert.match(foreign.r.stderr, /^flagged: content check: language/);
+  assert.match(foreign.r.stdout, /summary line 1: language/);
+  const refused = run(dir, ['create', '--summary', 'Добавить экспорт'], routes);
+  assert.equal(refused.r.status, 3, refused.r.output);
+  assert.match(refused.r.stderr, /^refused: content check: language/);
+  assert.deepEqual(writes(refused.calls), []);
   const unknown = run(dir, ['create', '--summary', 'Add export', '--labels', 'nope'], routes);
   assert.equal(unknown.r.status, 3, unknown.r.output);
   assert.deepEqual(writes(unknown.calls), []);

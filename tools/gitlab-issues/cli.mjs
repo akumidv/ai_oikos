@@ -7,7 +7,8 @@
 // without the first `transition` is refused. An agent never closes or reopens an issue.
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { runCli, required, printJson, nonLatinLetters, isMain, UsageError } from '../common/cli.mjs';
+import { runCli, required, printJson, isMain, UsageError } from '../common/cli.mjs';
+import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { gitlabClient, projectPath as pp } from '../common/gitlab.mjs';
 import { HttpError } from '../common/http.mjs';
 import { envValue, credentialsHelp } from '../common/env.mjs';
@@ -133,12 +134,13 @@ function notifyLine(...texts) {
   return who.length ? `will notify ${who.map((u) => `@${u}`).join(', ')}` : null;
 }
 
-function englishOnly(v, ...texts) {
-  const foreign = nonLatinLetters(texts.filter(Boolean).join(' '));
-  if (foreign && !v['allow-non-english']) {
-    throw new UsageError(`GitLab content is English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
-  }
+/** The content check (common/outgoing.mjs) of a write's texts, in its dry run and its real run. */
+function checkContent(v, texts) {
+  guardOutgoing(texts, v, outgoingRules());
 }
+
+/** The override flags of the content check, on every command that writes text. */
+const CHECK_OPTIONS = { 'allow-non-english': { type: 'boolean' }, 'allow-flagged': { type: 'boolean' } };
 
 const readText = (v) => (v.file ? readFileSync(v.file, 'utf8') : v.text);
 const readDescription = (v) => (v.file ? readFileSync(v.file, 'utf8') : v.description);
@@ -712,7 +714,7 @@ async function issueFields(g, v) {
   const body = {};
   const shown = [];
   const description = readDescription(v);
-  englishOnly(v, v.summary, description);
+  checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: description }]);
   if (v.summary) { body.title = v.summary; shown.push(`title: ${JSON.stringify(v.summary)}`); }
   if (v.labels !== undefined) { body.labels = splitList(v.labels).join(','); shown.push(`labels (set): ${body.labels || '(none)'}`); }
   if (v.assignee === 'none') { body.assignee_ids = [0]; shown.push('assignees: (none)'); }
@@ -725,7 +727,7 @@ async function issueFields(g, v) {
 const WRITE_TEXT = {
   summary: { type: 'string' }, description: { type: 'string' }, file: { type: 'string' },
   labels: { type: 'string' }, assignee: { type: 'string' }, due: { type: 'string' },
-  'create-labels': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' },
+  'create-labels': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, ...CHECK_OPTIONS,
 };
 
 Object.assign(commands, {
@@ -820,22 +822,18 @@ Object.assign(commands, {
 
   comment: {
     help: 'post a markdown comment (--task, --text or --file; --dry-run, which previews even without credentials)',
-    options: { task: { type: 'string' }, text: { type: 'string' }, file: { type: 'string' }, 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' } },
+    options: { task: { type: 'string' }, text: { type: 'string' }, file: { type: 'string' }, 'dry-run': { type: 'boolean' }, ...CHECK_OPTIONS },
     run: guarded(async (v) => {
       required(v, 'task');
       const text = readText(v);
       if (!text) throw new UsageError('--text or --file is required');
+      checkContent(v, [{ label: 'comment', text }]);
       const dry = Boolean(v['dry-run']);
       const g = clientOrOffline(dry);
       const ref = parseTask(v.task, { project: envValue('GITLAB_PROJECT'), base: g?.base || envValue('GITLAB_URL') });
-      const foreign = nonLatinLetters(text);
-      if (foreign && !dry && !v['allow-non-english']) {
-        throw new UsageError(`refusing to post: GitLab comments are English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
-      }
       const notify = notifyLine(text);
       if (dry) {
         const issue = g ? await fetchIssue(g, ref) : null;
-        if (foreign) console.log(`WARNING: non-Latin letters (${foreign}) — GitLab comments are English.`);
         dryHeader();
         console.log(`Project: ${ref.project}\nTask:    ${refText(ref)}${issue ? ` [${statusOf(issue, statusPolicy())}] ${issue.title}` : ''}`);
         console.log(`Target:  ${issue?.web_url || issueUrl(g?.base || siteUrl(), ref)}\nComment that WOULD be posted:`);

@@ -73,7 +73,7 @@ export function hookCommand(host, guard, base = '') {
 }
 
 /** A command oikos wrote: its dispatcher, or one of the older per-guard hook files. */
-export const isOikosCommand = (command) => /(^|[\/"\s])tools\/hooks\/[a-z-]+\.mjs\b/.test(String(command || ''));
+export const isOikosCommand = (command) => /(^|[/"\s])tools\/hooks\/[a-z-]+\.mjs\b/.test(String(command || ''));
 
 /** The oikos part of a `hooks` value: oikos's commands only, empty groups and events dropped. */
 export function oikosPart(hooks) {

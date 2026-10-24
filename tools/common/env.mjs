@@ -87,9 +87,16 @@ export function orgEmail(value) {
 /** "an @<domain> address" for messages, or "your work address" without a configured domain. */
 export const orgEmailLabel = () => (emailDomain() ? `an @${emailDomain()} address` : 'your work address');
 
-export function gitUserEmail() {
+/**
+ * `git config user.email` as git reads it in `dir` — that folder's repository configuration, else
+ * the user's — or null when none is set.
+ *
+ * @param {string} [dir] the folder git runs in; the working folder when absent
+ * @returns {string|null}
+ */
+export function gitUserEmail(dir) {
   try {
-    return execFileSync('git', ['config', 'user.email'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync('git', ['config', 'user.email'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return null;
   }

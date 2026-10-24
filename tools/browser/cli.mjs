@@ -4,15 +4,16 @@
 // MCP server in .mcp.json. This tool only starts that Chrome and reports on it.
 //
 // Chrome refuses remote debugging on the default profile, so oikos uses its own profile, kept in
-// the installation's git-ignored folder: .local/browser/chrome-profile — one browser per installation. Sign-ins, cookies and settings
-// survive between launches. Chrome is the system's, or Chrome for Testing that `install` puts
+// the installation's git-ignored folder: .local/.browser/chrome-profile — one browser per installation. Sign-ins, cookies and settings
+// survive between launches; an installation set up before keeps them in .local/browser/, used
+// there until `oikos sync` moves them (only while its Chrome is stopped). Chrome is the system's, or Chrome for Testing that `install` puts
 // into the project after the user agreed (common/programs.mjs has the lookup order). Under WSL
 // the Windows Chrome is found too; it gets the profile through its \\wsl.localhost path. OIKOS_CHROME_PROFILE
 // and OIKOS_CHROME_PATH override. The DevTools port is the installation's (OIKOS_CHROME_PORT, else
 // one derived from its folder), and a Chrome answering there is used only when its process runs
 // with this installation's profile — never just because the port answers. The installation's code
 // is its folder name; a Chrome oikos started carries it in its profile path
-// (`<code>/.local/browser/chrome-profile`), so a Chrome on the port is told as this installation's,
+// (`<code>/.local/.browser/chrome-profile`), so a Chrome on the port is told as this installation's,
 // another installation's (named), or one oikos did not start. The MCP server (mcp.mjs) runs the
 // same check (checkPort) before it attaches.
 //
@@ -21,15 +22,15 @@
 // `start` hands Chrome the agent's proxy: --proxy-server from HTTPS_PROXY/HTTP_PROXY/ALL_PROXY
 // and --proxy-bypass-list from NO_PROXY. OIKOS_CHROME_PROXY overrides it; `system` leaves Chrome
 // on the system proxy, `direct` turns proxying off. What was used is kept in
-// .local/browser/launch.json and shown by `status`.
+// .local/.browser/launch.json and shown by `status`.
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { platform, arch } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { runCli, isMain, printJson, UsageError } from '../common/cli.mjs';
 import { envValue, CORE_ROOT, isWsl, environment } from '../common/env.mjs';
-import { installPath, installRoot, localPath, realOf } from '../common/paths.mjs';
+import { installPath, installRoot, localStorePath, LOCAL_STORES, realOf } from '../common/paths.mjs';
 import { PROJECT_PROGRAMS, findProgram, installed, missingLibraries, progress, windowsSide,
   toolDependenciesInstalled, installToolDependencies } from '../common/programs.mjs';
 
@@ -75,7 +76,7 @@ export function chromePath() {
 
 // Cookies are encrypted per Chrome build: the user's own Chrome and a project install keep
 // separate profiles, so switching between them does not leave a profile neither can read.
-export const profileBase = () => localPath('browser', 'chrome-profile');
+export const profileBase = () => join(localStorePath('browser'), 'chrome-profile');
 const profileFor = () => (findChrome()?.source === 'project' ? `${profileBase()}-project` : profileBase());
 
 /** The profile folder as the Chrome process sees it (a Windows path for a Windows Chrome under WSL). */
@@ -119,7 +120,7 @@ async function devtools(p, path = '/json/version') {
   return isWsl() ? probeViaWindows(url) : null;
 }
 
-const launchFile = () => localPath('browser', 'launch.json');
+const launchFile = () => join(localStorePath('browser'), 'launch.json');
 
 /** The proxy arguments for Chrome from the agent's environment, and a line describing them. */
 export function proxyArgs() {
@@ -148,27 +149,38 @@ function readLaunch() {
  */
 function chromeCommandLines(p) {
   const flag = `--remote-debugging-port=${p}`;
+  return processCommandLines((line, args) => (args ? args.includes(flag) : line.includes(flag)), { like: flag }).lines;
+}
+
+/**
+ * The command lines of the processes `keep(line, args)` accepts — `args` the exact arguments where
+ * the platform gives them (/proc), else null — on this side (/proc, `ps`) and, with `like` (a
+ * PowerShell `-like` fragment) on Windows or under WSL, of `chrome.exe` on the Windows side.
+ * `complete` is false when a process table could not be read.
+ */
+function processCommandLines(keep, { like = null, windows = platform() === 'win32' || isWsl() } = {}) {
   const lines = [];
+  let complete = true;
   if (platform() === 'linux') {
     for (const pid of readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
       try {
         const args = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
-        if (args.includes(flag)) lines.push(args.join(' '));
+        if (keep(args.join(' '), args)) lines.push(args.join(' '));
       } catch { /* gone, or not ours to read */ }
     }
   } else if (platform() === 'darwin') {
     try {
-      lines.push(...execFileSync('ps', ['-axww', '-o', 'command='], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(flag)));
-    } catch { /* no ps */ }
+      lines.push(...execFileSync('ps', ['-axww', '-o', 'command='], { encoding: 'utf8' }).split('\n').filter((l) => keep(l, null)));
+    } catch { complete = false; }
   }
-  if (platform() === 'win32' || isWsl()) {
-    const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*${flag}*' } | ForEach-Object { $_.CommandLine }`;
+  if (like && windows) {
+    const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*${like.replace(/'/g, "''")}*' } | ForEach-Object { $_.CommandLine }`;
     try {
       lines.push(...execFileSync(isWsl() ? 'powershell.exe' : 'powershell', ['-NoProfile', '-Command', ps],
-        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000, cwd: isWsl() ? '/mnt/c' : undefined }).split(/\r?\n/).filter(Boolean));
-    } catch { /* no PowerShell */ }
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000, cwd: isWsl() ? '/mnt/c' : undefined }).split(/\r?\n/).filter((l) => l && keep(l, null)));
+    } catch { complete = false; }
   }
-  return lines;
+  return { lines, complete };
 }
 
 /** The `--user-data-dir` of a Chrome command line, quotes and case of a Windows path aside. */
@@ -179,16 +191,17 @@ const samePath = (a, b) => {
 };
 
 /**
- * The installation an oikos profile belongs to — `<code>/.local/browser/chrome-profile[-project]`,
- * as a Linux, macOS or Windows (`\\wsl.localhost\…`) path — or null for any other profile.
+ * The installation an oikos profile belongs to — `<code>/.local/.browser/chrome-profile[-project]`,
+ * or the legacy `<code>/.local/browser/…`, as a Linux, macOS or Windows (`\\wsl.localhost\…`)
+ * path — or null for any other profile.
  */
 export const profileInstallation = (dir) => String(dir || '')
-  .match(/([^\\/]+)[\\/]\.local[\\/]browser[\\/]chrome-profile(?:-project)?[\\/]*$/)?.[1] || null;
+  .match(/([^\\/]+)[\\/]\.local[\\/]\.?browser[\\/]chrome-profile(?:-project)?[\\/]*$/)?.[1] || null;
 
 /**
  * Whose Chrome the processes in `commandLines` (those listening on the DevTools port) are, for the
  * installation at `root`. `profile` is the profile this installation gives its Chrome now, `launch`
- * the content of its `.local/browser/launch.json` (the profile of its last `start`). Returns
+ * the content of its `.local/.browser/launch.json` (the profile of its last `start`). Returns
  * { owner: 'ours', installation } when a process runs with one of this installation's profiles;
  * { owner: 'foreign', installation, profile } otherwise — `installation` the code of the oikos
  * installation whose profile it is, null for a Chrome oikos did not start; { owner: 'unknown' }
@@ -199,7 +212,9 @@ export function chromeOwnership(commandLines, { root = null, launch = null, prof
   const dirs = commandLines.map(userDataDir);
   if (!dirs.length) return { owner: 'unknown' };
   const own = [profile, launch?.profile].filter(Boolean);
-  if (root) own.push(join(root, '.local', 'browser', 'chrome-profile'), join(root, '.local', 'browser', 'chrome-profile-project'));
+  // Both places of the store: a Chrome started before sync moved the profile runs from the old one.
+  const { parts, legacy } = LOCAL_STORES.browser;
+  if (root) for (const at of [parts, legacy]) own.push(join(root, '.local', ...at, 'chrome-profile'), join(root, '.local', ...at, 'chrome-profile-project'));
   if (dirs.some((d) => d && own.some((o) => samePath(d, o)))) return { owner: 'ours', installation: root ? basename(root) : null };
   const used = dirs.find(Boolean) || null;
   return { owner: 'foreign', installation: profileInstallation(used), profile: used };
@@ -232,6 +247,49 @@ export async function checkPort(p, { probe = devtools, owner = ownerOf, code = i
   if (!version) return null;
   const o = owner(p);
   return { version, owner: o, refusal: o.owner === 'ours' ? null : notOursMessage(o, { port: p, code }) };
+}
+
+/**
+ * Whether this installation's Chrome may be running — the check `status` makes (checkPort): true
+ * when a Chrome answers on its port, or on the port a launch.json of either place of the store
+ * recorded, and is not told as another's (a Chrome whose process was not found included); or when
+ * a process runs with one of the installation's profiles, at either place or as launch.json
+ * recorded it, as its `--user-data-dir`; or when a process table that had to be read could not be.
+ * `oikos sync` asks it before it moves the profile. `root` defaults to the installation, `port` to
+ * browserPort(), `launches` to the launch.json files there are; `check` and `profileInUse` are for
+ * tests.
+ */
+export async function chromeRunning({ root = installPath(), port: p, launches = storeLaunches(), check = checkPort, profileInUse = profileProcesses } = {}) {
+  const ports = new Set([p ?? browserPort(), ...launches.map((l) => Number(l.port)).filter(Boolean)]);
+  for (const q of ports) {
+    const found = await check(q);
+    if (found && found.owner.owner !== 'foreign') return true;
+  }
+  const { parts, legacy } = LOCAL_STORES.browser;
+  const profiles = [...[parts, legacy].flatMap((at) => ['chrome-profile', 'chrome-profile-project'].map((name) => join(root, '.local', ...at, name))),
+    ...launches.map((l) => l.profile).filter(Boolean)];
+  return profileInUse(profiles, { windows: platform() === 'win32' || launches.some((l) => windowsSide(l.exe)) });
+}
+
+/** The content of the launch.json at each place of the browser store that has one. */
+function storeLaunches() {
+  const { parts, legacy } = LOCAL_STORES.browser;
+  return [parts, legacy].flatMap((at) => {
+    try { return [JSON.parse(readFileSync(installPath('.local', ...at, 'launch.json'), 'utf8'))]; } catch { return []; }
+  });
+}
+
+/**
+ * Whether a process runs with one of `profiles` as its `--user-data-dir` — on the Windows side
+ * too with `windows` — or the process table could not be read, which counts as running.
+ */
+function profileProcesses(profiles, { windows = false } = {}) {
+  const ours = (line) => {
+    const dir = userDataDir(line);
+    return Boolean(dir) && profiles.some((profile) => samePath(dir, profile));
+  };
+  const { lines, complete } = processCommandLines(ours, { like: 'chrome-profile', windows });
+  return lines.length > 0 || !complete;
 }
 
 /** Stop the oikos Chrome (the one using our profile), wherever it runs. */

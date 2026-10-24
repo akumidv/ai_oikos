@@ -6,7 +6,8 @@
 // only read. Every write has --dry-run, commits as the token owner's noreply identity and pushes
 // without force.
 import { readFileSync } from 'node:fs';
-import { runCli, printJson, nonLatinLetters, UsageError } from '../common/cli.mjs';
+import { runCli, printJson, UsageError } from '../common/cli.mjs';
+import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { envValue } from '../common/env.mjs';
 import { githubClient, githubToken, repoName } from '../common/github.mjs';
 import { appendToPage, findSection, replaceSection } from '../common/sections.mjs';
@@ -86,11 +87,9 @@ function bodyText(v) {
   return text;
 }
 
-function englishOnly(v, ...texts) {
-  const foreign = nonLatinLetters(texts.filter(Boolean).join(' '));
-  if (foreign && !v['allow-non-english']) {
-    throw new UsageError(`wiki content is English, found non-Latin letters: ${foreign}. Translate, or pass --allow-non-english.`);
-  }
+/** The content check (common/outgoing.mjs) of a write's texts, its --version-message included. */
+function checkContent(v, texts) {
+  guardOutgoing([...texts, { label: 'version message', text: v['version-message'] }], v, outgoingRules());
 }
 
 /** The repositories GITHUB_PUBLIC_REPOS allows writes to, lower case. */
@@ -183,7 +182,7 @@ function pageContext(text, atStart) {
 const withNewline = (text) => (text.endsWith('\n') ? text : `${text}\n`);
 
 const pageOptions = { page: { type: 'string' }, repo: { type: 'string' } };
-const writeOptions = { 'version-message': { type: 'string' }, 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' } };
+const writeOptions = { 'version-message': { type: 'string' }, 'dry-run': { type: 'boolean' }, 'allow-non-english': { type: 'boolean' }, 'allow-flagged': { type: 'boolean' } };
 
 const commands = {
   whoami: {
@@ -291,7 +290,7 @@ const commands = {
       const ref = pageRef(v.title);
       if (ref.repo) throw new UsageError('--title is the new page name, not a URL');
       const text = bodyText(v);
-      englishOnly(v, v.title, text);
+      checkContent(v, [{ label: 'title', text: v.title }, { label: 'page', text }]);
       const repo = wikiRepo(v);
       const file = ref.file || `${ref.stem}.${WRITABLE_EXTENSION}`;
       return writePage(v, repo, async (clone) => {
@@ -317,7 +316,7 @@ const commands = {
     async run(v) {
       const ref = pageRef(v.page);
       const text = bodyText(v);
-      englishOnly(v, v.heading, text);
+      checkContent(v, [{ label: 'heading', text: v.heading }, { label: 'section', text }]);
       const level = Number(v['heading-level'] || 2);
       const repo = wikiRepo(v, ref);
       return writePage(v, repo, async (clone) => {
@@ -344,7 +343,7 @@ const commands = {
       const ref = pageRef(v.page);
       if (!v.heading) throw new UsageError('--heading is required (the exact heading text)');
       const text = bodyText(v);
-      englishOnly(v, text);
+      checkContent(v, [{ label: 'section', text }]);
       const repo = wikiRepo(v, ref);
       return writePage(v, repo, async (clone) => {
         const file = await existingPage(clone, ref, repo);
