@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { installation, tool, withFakeFetch } from './helpers/installation.mjs';
-import { BUILT_IN_RULES, maskSecret, outgoingFindings, outgoingRules } from '../tools/common/outgoing.mjs';
+import { BUILT_IN_RULES, maskSecret, nonLatinLetters, outgoingFindings, outgoingRules } from '../tools/common/outgoing.mjs';
 
 const SITE = 'https://acme.atlassian.net';
 const API = `${SITE}/rest/api/3`;
@@ -35,6 +35,13 @@ test('language: non-Latin letters are a finding, Latin with diacritics is not', 
   assert.deepEqual(categories('Café déjà vu, Zürich'), []);
 });
 
+test('language: Greek letters are the symbols of a formula, not a finding; other scripts beside them still are', () => {
+  assert.deepEqual(categories('the rate is α·Δt + σ², with ω = 2πf'), []);
+  assert.deepEqual(categories('ἀρχή and ά'), []);
+  assert.deepEqual(categories('α is the learning rate, готово'), ['language']);
+  assert.equal(nonLatinLetters('αβγ Привет'), 'Пвеирт');
+});
+
 test('assistant: the name, its files and command line, a skill in path form — not a bare skill name', () => {
   for (const text of ['set up by oikos', 'see oikos.yaml', 'OIKOS.md says', 'OIKOS_HOME=/srv', 'run node oikos/tools/jira/cli.mjs', 'skills/wiki/SKILL.md', 'the SKILL.md file']) {
     assert.deepEqual(categories(text), ['assistant'], text);
@@ -43,7 +50,7 @@ test('assistant: the name, its files and command line, a skill in path form — 
 });
 
 test('path: a home folder, a Windows or WSL path, /tmp/, the scratchpad, .local/, file://', () => {
-  for (const text of ['/home/ada/notes.md', '/Users/ada/x', 'C:\\Users\\ada', '/mnt/c/Users/ada', '\\\\wsl$\\Ubuntu', '/tmp/x.log', 'in the scratchpad', 'in .local/cv', 'file://server/share']) {
+  for (const text of ['/home/ada/notes.md', '/Users/ada/x', 'C:\\Users\\ada', '/mnt/d/Users/ada', '\\\\wsl$\\Ubuntu', '/tmp/x.log', 'in the scratchpad', 'in .local/cv', 'file://server/share']) {
     assert.deepEqual(categories(text), ['path'], text);
   }
   assert.deepEqual(categories('https://example.com/docs/page'), []);
@@ -57,6 +64,23 @@ test('secret: token prefixes with a token body, a private-key block, a JWT shape
   for (const text of secrets) assert.deepEqual(categories(text), ['secret'], text.slice(0, 6));
   assert.deepEqual(categories('the commit ghp is a word; akia too'), []);
   assert.equal(maskSecret(TOKEN), 'ghp_… (40 characters)');
+});
+
+test('allow: an entry drops a secret only when it contains the secret; other categories keep the line rule (D-ALLOW-SECRET)', () => {
+  const other = `ghp_${'b'.repeat(36)}`;
+  const rules = (...allow) => ({ ...BUILT_IN_RULES, allow });
+  const line = `use ${TOKEN} for the job in /tmp/x`;
+  assert.deepEqual(categories(line, rules('for the job')), ['secret'], 'a phrase on the line drops the path, not the secret');
+  assert.deepEqual(categories(line, rules(TOKEN.slice(0, 12))), ['secret'], 'a part of the secret does not contain it');
+  assert.deepEqual(categories(line, rules(TOKEN)), [], 'an entry holding the secret drops it, and the line is allowed');
+  const two = outgoingFindings(`${TOKEN} and ${other}`, rules(TOKEN));
+  assert.deepEqual(two.map((f) => f.match), [other], 'every secret on the line needs its own entry');
+});
+
+test('secret: a token followed by more characters is still caught', () => {
+  for (const tail of ['x', '_x', 'abc', '0']) assert.deepEqual(categories(`${TOKEN}${tail}`), ['secret'], tail);
+  assert.deepEqual(categories(`AKIA${'A'.repeat(16)}_x`), ['secret']);
+  assert.deepEqual(categories(`id ghp_${'a'.repeat(35)}`), [], 'a body one character short is not a token');
 });
 
 test('term: the installation\'s own words, ignoring case; allow: drops a line that holds an allowed string', () => {
@@ -103,7 +127,7 @@ test('--allow-flagged in both runs: the dry run marks the findings overridden an
   assert.equal(writesOf(real.calls).length, 1);
 });
 
-test('a secret is masked, the preview withheld, and --allow-flagged does not override it; an allow: entry does', () => {
+test('a secret is masked, the preview withheld, and --allow-flagged does not override it; an allow: entry holding it does', () => {
   const dir = fresh();
   const args = ['comment', '--task', 'PROJ-15', '--text', `Use the token ${TOKEN} for the job`, '--allow-flagged'];
   const dry = run(dir, [], [...args, '--dry-run'], { creds: {} });
@@ -118,10 +142,35 @@ test('a secret is masked, the preview withheld, and --allow-flagged does not ove
   assert.doesNotMatch(real.output, new RegExp(TOKEN));
   assert.deepEqual(writesOf(real.calls), []);
 
+  // An entry that merely sits on the line does not let a secret pass; one that holds the secret does.
   writeFileSync(join(dir, '.local', 'outgoing.yaml'), 'allow: ["for the job"]\n');
+  const nearby = run(dir, [], [...args, '--dry-run'], { creds: {} });
+  assert.equal(nearby.status, 3, nearby.output);
+  writeFileSync(join(dir, '.local', 'outgoing.yaml'), `allow: ["${TOKEN}"]\n`);
   const allowed = run(dir, [], [...args, '--dry-run'], { creds: {} });
   assert.equal(allowed.status, 0, allowed.output);
   assert.match(allowed.stdout, /1 line\(s\) let pass by allow: in \.local\/outgoing\.yaml/);
+});
+
+test('a secret on a line with another finding is masked in the check block, the refusal and `outgoing check`', () => {
+  const dir = fresh();
+  const token = `ghp_${'a'.repeat(36)}`;
+  const text = `token ${token} see /tmp/x and ${token}`;
+  const args = ['comment', '--task', 'PROJ-15', '--text', text, '--allow-flagged'];
+  const dry = run(dir, [], [...args, '--dry-run'], { creds: {} });
+  assert.equal(dry.status, 3, dry.output);
+  assert.match(dry.stdout, /comment line 1: path — \/tmp\/ {2}│ token ghp_… \(40 characters\) see \/tmp\/x and ghp_… \(40 characters\)/);
+  assert.doesNotMatch(dry.output, /ghp_a{4}/);
+  const real = run(dir, [POST_COMMENT], args.slice(0, -1));
+  assert.equal(real.status, 3, real.output);
+  assert.match(real.stderr, /^refused: content check: path, secret/);
+  assert.match(real.stderr, /path — \/tmp\/ {2}│ token ghp_… \(40 characters\)/);
+  assert.doesNotMatch(real.output, /ghp_a{4}/);
+  assert.deepEqual(writesOf(real.calls), []);
+  const check = tool(dir, 'outgoing', ['check', '--text', text], {});
+  assert.equal(check.status, 3, check.output);
+  assert.match(check.stdout, /│ token ghp_… \(40 characters\) see/);
+  assert.doesNotMatch(check.output, /ghp_a{4}/);
 });
 
 test('a --file whose markdown link points at a local file is a path finding', () => {

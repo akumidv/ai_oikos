@@ -1061,3 +1061,47 @@ test('epics: without roles or epic_projects the section and the brief line are a
   assert.doesNotMatch(r.stdout, /Role epics|epic_projects|Rank as/);
   assert.ok(!r.calls.some((c) => c.url.startsWith(`${API}/project/`) || /issue\/PROJ-1\d\?/.test(c.url)));
 });
+
+// -- the content check of the pull request lines a confirm move adds (ADR 0003 D01, D-OUT-LABELS) --------
+
+/** The pool's answers with pull request 14's title holding a local path: its line reaches the comment. */
+const pathTitle = (routes) => routes.map((r) => (r === graphqlRoute ? JSON.parse(JSON.stringify(r).replace('Report UI', 'Report in /tmp/ui')) : r));
+
+test('content check: a pull request line with a local path is flagged in the confirm dry run, refused by the real move before it moves; --allow-flagged in both lets it through', () => {
+  const dir = installation(withPool);
+  const routes = [issueRoute('Review', epicParent), transitionsRoute, ...pathTitle(POOL_ROUTES),
+    { method: 'POST', url: `${API}/issue/PROJ-7/transitions`, status: 204 }, { method: 'POST', url: `${API}/issue/PROJ-7/comment`, status: 201, body: { id: '9' } }];
+  const args = ['transition', '--task', 'PROJ-7', '--to', 'Done', '--comment', 'Checked on staging.'];
+  const jiraWrites = (calls) => writesOf(calls).filter((c) => !c.url.endsWith('/graphql'));
+
+  const dry = run(dir, routes, [...args, '--dry-run']);
+  assert.equal(dry.status, 3, dry.output);
+  assert.match(dry.stdout, /^CHECK outgoing text: 1 finding\(s\)\n {2}PROJ-7 pull request lines line 2: path — \/tmp\//m);
+  assert.match(dry.stderr, /^flagged: content check: path/m);
+  assert.match(dry.stdout, /^## Comment posted with the move$/m, 'the evidence is still printed');
+  assert.deepEqual(jiraWrites(dry.calls), []);
+
+  const real = run(dir, routes, args);
+  assert.equal(real.status, 3, real.output);
+  assert.match(real.stderr, /^refused: content check: path — nothing written/);
+  assert.deepEqual(jiraWrites(real.calls), [], 'refused before the move: the task is not moved');
+
+  const allowedDry = run(dir, routes, [...args, '--dry-run', '--allow-flagged']);
+  assert.equal(allowedDry.status, 0, allowedDry.output);
+  assert.match(allowedDry.stdout, /\(overridden\)/);
+  const allowed = run(dir, routes, [...args, '--allow-flagged']);
+  assert.equal(allowed.status, 0, allowed.output);
+  assert.deepEqual(jiraWrites(allowed.calls).map((c) => c.url.slice(API.length)), ['/issue/PROJ-7/transitions', '/issue/PROJ-7/comment']);
+});
+
+test('content check: a batch move whose pull request line is flagged is refused for that task alone; the others move; exit 2', () => {
+  const dir = installation(withPool);
+  const quietHosts = [{ match: `^${GH}/search/commits`, body: { total_count: 0, items: [] } }, { match: `^${GL}/projects/acme%2Fbackend/`, body: [] }];
+  const routes = [...BATCH_ROUTES, ...pathTitle([graphqlRoute]), pull3, ...devStatusRoutes, ...gitlabRoutes, ...quietHosts, ...postedFor('PROJ-8')];
+  const r = run(dir, routes, ['transition', '--task', 'PROJ-7,PROJ-8', '--to', 'Done', '--comment', 'Checked on staging.']);
+  assert.equal(r.status, 2, r.output);
+  assert.match(r.stderr, /^PROJ-7: refused: content check: path — nothing written/m);
+  assert.match(r.stdout, /^moved PROJ-8$/m);
+  assert.match(r.stdout, /^1\/2 moved$/m);
+  assert.ok(!writesOf(r.calls).some((c) => c.url.includes('/PROJ-7/')), 'PROJ-7 was not moved');
+});

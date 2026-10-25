@@ -111,6 +111,12 @@ run from an installation or with `OIKOS_HOME`.
   — shell globs in arguments (`.local/{.secrets,cv}/…`, `.local/?env`, `.lo*/…`) judged like globs;
   `git diff --no-index` on a store; fd-number redirects (`0<path`); `find . -exec`, root-level
   `grep -r x .` and globs not spelling `.local` (`**/.secrets/**`); symlinks not resolved.
+- L3 · Guard: writes by script bypass it · deferred · Judge what a script run does, not only the command text
+  — the hook reads the command line only, so `node script.mjs` or `node -e` that calls a connector's
+  write (jira, github, gitlab, confluence) passes while the same call typed as a command is denied. Options:
+  a runtime check in the shared HTTP clients (a non-GET outside a tool entry point asks), or deny
+  `node -e`/an unlisted script that imports `tools/*/` clients; a source scan alone is not enough.
+  Raised in T5 (a side agent's note); the owner decides the route before code.
 - F8 · Extension rules from the installation · active · No app or block names in the core's extension
   — the owner's choice: `oikos.yaml` `browser_helpers` (per site: optional hosts, helpers with
   `hide`/`open` titles); `sync` builds the extension into `.local/extension/` (core code, a
@@ -129,6 +135,24 @@ run from an installation or with `OIKOS_HOME`.
 - F13 · `jira history` · active · Moves by role, time in status, returns from review — done in code, tests green; left: commit.
 - F14 · Code-hosting governance reads · active · `governance`, `merged` on GitHub and GitLab; 404 read as "or needs admin" — done in code, tests green; left: commit.
 - F15 · Context economy, hook advice · active · OIKOS.md § Context economy; context-pressure hook says park the work package first — done; left: commit.
-- F16 · Outward-content lint · active · [ADR 0003](../docs/adr/0003-outward-content.md) accepted 2026-10-22; in code — [design](../docs/design/outward-content.md).
-- F17 · Tracker policy · active · [ADR 0004](../docs/adr/0004-tracker-policy.md) accepted 2026-10-22; in code — [design](../docs/design/tracker-policy.md).
-- F18 · Work-package park · active · [ADR 0005](../docs/adr/0005-work-package.md) accepted 2026-10-22; in code — [design](../docs/design/work-package.md).
+- F16 · Outward-content lint · active · [ADR 0003](../docs/adr/0003-outward-content.md) accepted; built with the audit fixes and D-ALLOW-SECRET, D-OUT-LABELS; left: owner commit — [design](../docs/design/outward-content.md).
+- F17 · Tracker policy · active · [ADR 0004](../docs/adr/0004-tracker-policy.md) accepted; built, also in github/gitlab-issues (D06, D-POLICY-HOSTS); left: owner confirms the `projects.<repo path>` key, commit — [design](../docs/design/tracker-policy.md).
+- F18 · Work-package park · active · [ADR 0005](../docs/adr/0005-work-package.md) accepted; built with the audit fixes and D-PARK-SCRATCH; left: owner commit — [design](../docs/design/work-package.md).
+
+## Desk agent — notes to tasks in a standing session
+
+[Design](../docs/design/desk.md), [ADR 0006](../docs/adr/0006-desk-agent.md) (accepted).
+
+- A1 · Agent charter format in oikos · active · built, tests `tests/agents.test.mjs`, left: owner review and commit. `agents/<name>/README.md`, `agents:` in `oikos.yaml`, sync pointer, checks
+  — split A1a (format, core-side checks) and A1b (delivery, installation roster); steps: `agents:` read by `config()` (it reads only known keys); `sync` pointer names and template
+  (it deletes any marked pointer not in its names list, and its template is hard-wired to `skills/`);
+  `landscape` reader; list of enabled agents in the installation's session-start hook; the checks;
+  DEVELOPMENT.md layout, OIKOS.md, example installation, tests.
+- A2 · Skill `notes` · active · Scenarios capture, digest, draft-and-create; verbatim notes, unit table before texts; link provenance and draft hygiene live here; `compact` ships with A3
+- A3 · Tool `desk` · active · `new`, `index`, `list`, `find`, `compact` (plan, `--yes`), `reopen`; layout `.local/desk/<date>/<topic>/`, retention 30/90 days; the `notes` scenario `compact`; the `desk:` part of `oikos.yaml`; `handoff list` skips `desk`
+- A4 · Review of a task's result · active · `task-tracking` scenario `review-result` and `messaging` scenario `thread-of-task` written; the `task-tracking` refusal and `move-task` now point to the review; the desk charter lists both; left: owner review and commit (attachments: `attachment` exists in the jira and issue connectors; F12 only adds uploads)
+- A5 · Review through a mounted outside project · blocked · After the mounts task; read/review from the root, writes in its own session
+- A6 · Fixes found in the first run · active · Greek letters no longer count as non-English — ADR 0003 D02 amended (owner, 2026-10-27), built in `nonLatinLetters` with a test, left: owner review and commit. People lookup (alias → account): [ADR 0006](../docs/adr/0006-desk-agent.md) D06 — `.local/private.yaml`, file first, then the connector's search, then add; tool `people`, git-ignored line forced by `setup init` and `sync`; building
+- A7 · akmon: develop and deliver standing agents · active · Prompt in the design's appendix; the owner runs it in an akmon session
+- A8 · Context-pressure advice names the desk · active · The hook advises `park … .local/<task>/`; with the desk it advises a topic card first
+- A9 · Mounts in the core · deferred · Design from the installation's handoff (an outside project as a source of skills and wiki, never of rules); A5 waits on it

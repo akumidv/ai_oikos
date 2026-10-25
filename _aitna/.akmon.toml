@@ -1,10 +1,10 @@
 # akmon integration record — written by `akmon init`, refreshed on realign.
 # The version this project sits on; a later bump diffs the CHANGELOG window against it.
 mount = "submodule"
-akmon_version = "v0.4.0"
+akmon_version = "14fc32f"
 attached_archetype = "package/javascript"
 
-last_realign = "v0.4.0"
+last_realign = "14fc32f"
 ecosystem = "node"
 [test]
 # The project's own pytest invocation, used verbatim by the release check

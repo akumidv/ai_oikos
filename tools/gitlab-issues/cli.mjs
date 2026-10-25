@@ -12,6 +12,9 @@ import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { gitlabClient, projectPath as pp } from '../common/gitlab.mjs';
 import { HttpError } from '../common/http.mjs';
 import { envValue, credentialsHelp } from '../common/env.mjs';
+import { config } from '../common/config.mjs';
+import { INSTALL_FILE } from '../common/paths.mjs';
+import { statusPolicyRefusal, trackerProblems } from '../common/transitions.mjs';
 
 const TOOL = 'node oikos/tools/gitlab-issues/cli.mjs';
 const DEFAULT_MAX = 50;
@@ -117,6 +120,39 @@ const labelNames = (issue) => (issue.labels || []).map((l) => (typeof l === 'str
 export function statusOf(issue, policy) {
   if (issue.state === 'closed') return 'closed';
   return labelNames(issue).find((l) => inList(policy.agent, l) || inList(policy.review, l)) || 'open';
+}
+
+// == the organization's tracker policy ==
+// ADR 0004, D-POLICY-HOSTS: `task-tracking.gitlab-issues` of oikos.yaml, `policy.person_only` in
+// `defaults` and in the project of the issue (`projects.<group/project>`). A status label it names
+// is never moved into or out of by an agent, whatever GITLAB_AGENT_STATUSES lists; `confirm` does
+// not satisfy it (no rule of this tool is `confirm`).
+
+const TRACKER = 'task-tracking.gitlab-issues';
+
+/** The `task-tracking.gitlab-issues` part, checked at load: a usage error naming each problem. */
+function trackerPart() {
+  const part = config()['task-tracking']?.['gitlab-issues'];
+  const problems = trackerProblems(part, TRACKER);
+  if (problems.length) throw new UsageError(`${INSTALL_FILE} has problems in ${TRACKER} — fix them first: ${problems.join('; ')}`);
+  return part;
+}
+
+/**
+ * Refuse (exit 3, `refused: policy:`) a change that moves into, out of or touches a person-only
+ * status label: `names` are the status labels involved, `project` the GitLab project whose policy
+ * holds, `what` the change as a sentence subject, `yourself` what the user does instead. Before
+ * anything is sent; the same in a dry run and a real run.
+ */
+function refusePersonOnly(names, { project, url, what, yourself }) {
+  const agent = { setting: 'GITLAB_AGENT_STATUSES', statuses: statusPolicy().agent };
+  const message = statusPolicyRefusal(trackerPart(), project, names, { path: TRACKER, what, agent });
+  if (message) throw new Refusal(`${message} — ${yourself}: ${url}`);
+}
+
+/** `refusePersonOnly` for a status move of the issue `ref` to the label `to`. */
+function refuseMove(ref, to, names, what) {
+  refusePersonOnly(names, { project: ref.project, url: issueUrl(siteUrl(), ref), what, yourself: `move ${refText(ref)} to '${to}' yourself` });
 }
 
 // == text guards ==
@@ -714,7 +750,10 @@ async function issueFields(g, v) {
   const body = {};
   const shown = [];
   const description = readDescription(v);
-  checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: description }]);
+  checkContent(v, [
+    { label: 'summary', text: v.summary }, { label: 'description', text: description },
+    { label: 'labels', text: v.labels }, { label: 'add-labels', text: v['add-labels'] },
+  ]);
   if (v.summary) { body.title = v.summary; shown.push(`title: ${JSON.stringify(v.summary)}`); }
   if (v.labels !== undefined) { body.labels = splitList(v.labels).join(','); shown.push(`labels (set): ${body.labels || '(none)'}`); }
   if (v.assignee === 'none') { body.assignee_ids = [0]; shown.push('assignees: (none)'); }
@@ -722,6 +761,25 @@ async function issueFields(g, v) {
   if (v.due) { body.due_date = v.due === 'none' ? null : v.due; shown.push(`due: ${v.due}`); }
   if (description !== undefined) { body.description = description; shown.push(`description:\n${'-'.repeat(40)}\n${description}\n${'-'.repeat(40)}`); }
   return { body, shown, notify: notifyLine(v.summary, description) };
+}
+
+/**
+ * An edit that adds, removes or (by --labels) changes a label named like a person-only status moves
+ * the status — refused for each issue (the status of an issue is a label), before the dry run.
+ */
+function refuseStatusLabelEdits(issues, v) {
+  const set = v.labels !== undefined ? splitList(v.labels) : null;
+  const add = splitList(v['add-labels']);
+  const remove = splitList(v['remove-labels']);
+  for (const issue of issues) {
+    const ref = refOf(issue);
+    const current = labelNames(issue);
+    const changed = [
+      ...add.filter((l) => !inList(current, l)), ...remove.filter((l) => inList(current, l)),
+      ...(set ? [...set.filter((l) => !inList(current, l)), ...current.filter((l) => !inList(set, l))] : []),
+    ];
+    refusePersonOnly(changed, { project: ref.project, url: issueUrl(siteUrl(), ref), what: `changing these labels of ${refText(ref)} is a person's move`, yourself: `change ${refText(ref)} yourself` });
+  }
 }
 
 const WRITE_TEXT = {
@@ -738,6 +796,7 @@ Object.assign(commands, {
       required(v, 'summary');
       const project = v.project || envValue('GITLAB_PROJECT');
       if (!project) throw new UsageError('--project is required (or GITLAB_PROJECT in oikos.yaml settings)');
+      refusePersonOnly(splitList(v.labels), { project, url: `${siteUrl()}/${project}`, what: `creating this issue in ${project} with a status label is a person's move`, yourself: 'create the issue yourself' });
       const g = gl();
       const { body, shown, notify } = await issueFields(g, v);
       if (v.type) { body.issue_type = v.type; shown.push(`type: ${v.type}`); }
@@ -784,6 +843,7 @@ Object.assign(commands, {
       if (remove.length) body.remove_labels = remove.join(',');
       if (!Object.keys(body).length) throw new UsageError('nothing to change: pass at least one field option');
       const issues = await selectIssues(g, v);
+      refuseStatusLabelEdits(issues, v);
       const cache = new Map();
       const created = new Set();
       for (const project of new Set(issues.map((i) => refOf(i).project))) {
@@ -850,7 +910,7 @@ Object.assign(commands, {
   },
 
   transition: {
-    help: 'move a task among the status labels open to an agent only (GITLAB_AGENT_STATUSES; --task, --to, --dry-run): one PUT with add_labels and remove_labels; never closes or reopens',
+    help: 'move a task among the status labels open to an agent only (GITLAB_AGENT_STATUSES; --task, --to, --dry-run): one PUT with add_labels and remove_labels; never closes or reopens, and never moves into or out of a person_only status of the policy in task-tracking.gitlab-issues (refused: policy:)',
     options: { task: { type: 'string' }, to: { type: 'string' }, 'dry-run': { type: 'boolean' } },
     run: guarded(async (v) => {
       required(v, 'task', 'to');
@@ -858,6 +918,7 @@ Object.assign(commands, {
       const ref = parseTask(v.task, { project: envValue('GITLAB_PROJECT'), base: envValue('GITLAB_URL') });
       const url = issueUrl(siteUrl(), ref);
       if (/^(close|closed|reopen|reopened)$/i.test(v.to.trim())) throw new Refusal(`an agent never closes or reopens an issue — a person does it: ${url}`);
+      refuseMove(ref, v.to, [v.to], `moving ${refText(ref)} to '${v.to}' is a person's move`);
       if (!policy.agent.length) {
         throw new Refusal('GITLAB_AGENT_STATUSES is not set — gitlab-issues has no default status labels. '
           + `Set the labels an agent may move a task among in oikos.yaml settings, or move ${refText(ref)} yourself: ${url}`);
@@ -868,6 +929,7 @@ Object.assign(commands, {
       const issue = await fetchIssue(g, ref);
       if (issue.state === 'closed') throw new Refusal(`${refText(ref)} is closed; reopening is a person's: ${issue.web_url || url}`);
       const labels = labelNames(issue);
+      refuseMove(ref, v.to, labels, `moving ${refText(ref)} out of its status is a person's move`); // a label named like a person-only status is the issue's status
       const review = labels.filter((l) => inList(policy.review, l));
       if (review.length) throw refuse(`${refText(ref)} is in ${review.join(', ')}: from review on only a person moves it`);
       const target = (await projectLabels(g, ref.project, new Map())).find((l) => same(l, v.to));

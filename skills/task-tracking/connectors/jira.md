@@ -131,7 +131,7 @@ node oikos/tools/jira/cli.mjs transition --task PROJ-24,PROJ-25 --to Done --dry-
 ```bash
 # create — markdown description, assignee `me` or an email
 node oikos/tools/jira/cli.mjs create --project PROJ --type Task --summary "..." --file <scratchpad>/desc.md \
-  --parent PROJ-1 --assignee me --labels oikos --priority Medium --due 2026-10-15 --sprint 1046 --dry-run
+  --parent PROJ-1 --assignee me --labels export --priority Medium --due 2026-10-15 --sprint 1046 --dry-run
 # edit one or many; --labels sets, --add-labels/--remove-labels change; --assignee none unassigns
 node oikos/tools/jira/cli.mjs edit --task PROJ-15,PROJ-39 --priority Low --dry-run
 node oikos/tools/jira/cli.mjs edit --jql 'project = PROJ AND labels = old' --max 20 --add-labels new --remove-labels old --dry-run
@@ -161,8 +161,14 @@ node oikos/tools/jira/cli.mjs attach --task PROJ-15 --file report.pdf --file .lo
 - `--parent` is read before the dry run and the write: a parent in another project is refused
   when either project is team-managed (Jira allows only a same-project parent there), with the
   `link` to make instead; between company-managed projects it passes with a note.
-- Summaries, descriptions and comments are English; the tool refuses non-Latin text unless
-  `--allow-non-english` is passed.
+- Every text a write sends — summary, description, comment, a move's `--comment`, labels
+  (`--labels`, `--add-labels`), the pull request lines a confirm move adds to its comment, a
+  `--file`, an image's name and alt text, a text attachment — goes through the one content check (OIKOS.md,
+  *What goes out*): the dry run lists each flagged line and exits 3, the real run refuses
+  (`refused: content check:`) until the text is fixed or `--allow-flagged` (also
+  `--allow-non-english` for non-English text) is in the command, dry run and write alike; never
+  `--force`, which is the lossy-content override. A secret is not overridable. Images, PDFs and
+  office files are not read: only their names.
 - **To change part of a description, use `description`.** `--section "Heading"` replaces the body
   under that top-level heading (case-insensitive; `"## Heading"` fixes the level) up to the next
   heading of its level; several matches are refused with the list, a missing one is appended as a
@@ -254,3 +260,11 @@ is the organization's: read its resource note (`node oikos/tools/landscape/cli.m
 domain is configured and the git email is in it) — in
 `.local/.env` (the shell environment is only a fallback). `JIRA_BASE_URL` is in the `settings` of `oikos.yaml`. `whoami` shows what is
 set and where from. Never ask for a token in the chat.
+
+## People key
+
+In the people file (`.local/private.yaml`, `accounts:`) a person's Jira account is under the key
+**`jira`**; its value is the Atlassian account id. Pass it where a command takes a person
+(`--assignee`, `--user`, `--owner`; a mention is `[~accountid:<id>]`). Not in the file: `--assignee
+<email|name>` is searched by the tool, which refuses on none or several matches — then ask, and
+offer `people add` ([notes](../../notes/SKILL.md) § Resolving a person). One Jira per installation.

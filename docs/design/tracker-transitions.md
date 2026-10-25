@@ -4,7 +4,7 @@ Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md
 is accepted until the owner says so; accepted commitments then move to ADR blocks and the
 implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md).
 
-**State:** accepted by the owner (2026-10-19); commitments in
+**State:** accepted by the owner; commitments in
 [ADR 0001](../adr/0001-tracker-transitions.md), implementation in `_aitna/TASKS.md` (T1–T5).
 O4 and O5 are settled during T1 against the live tracker. A second round, from a sprint pass over
 some forty tasks (O10–O14: epics by role and across projects, bare task numbers bound to
@@ -418,15 +418,15 @@ As built for Jira in T3 (no decision changed; where the code differs from the st
 
 | # | Point | State |
 |---|---|---|
-| O1 | Who may move: structured (`from`, `to`, `mode`); what is enough: prose (`requires`, `results`) judged by the agent | decided (owner, 2026-10-19) |
-| O2 | A non-code task goes Review → Done directly (the result is checked at review), or back to To Do / Fix with a comment | decided (owner, 2026-10-19) |
-| O3 | A `confirm` move is confirmed by the user's next prompt after the agent's question in chat — the guard as it is; no question tool | decided (owner, 2026-10-19) |
-| O4 | Dev-status endpoint and coverage on the organization's Jira (Cloud vs Server, which apps) | checked live in T1 (2026-10-19, Jira Cloud): `/rest/dev-status/latest/issue/summary?issueId=` answers and counts pull requests per integration app; `/issue/detail` with `applicationType=GitHub` returned none for tasks the summary counts PRs on — the PRs come through a third-party git integration app whose `applicationType` differs. Settled in T2 (2026-10-19, live): the summary's `pullrequest.byInstanceType` / `branch.byInstanceType` keys are the `applicationType` values (a third-party app's is its own id, e.g. `oAuth-<app id>`); `/issue/detail?applicationType=<that key>&dataType=pullrequest` answers `detail[]` of `{ pullRequests[], branches[], repositories[] }`, a PR as `{ id, name, status (OPEN / MERGED / DECLINED), url, source.branch, destination.branch, repositoryName, repositoryUrl }`, a branch as `{ name, url (…/tree/<branch>), repository }`. `applicationType=GitHub` answers an empty `detail` for the same tasks; a bad issue id answers 400. The tool reads the detail once per type the summary names |
+| O1 | Who may move: structured (`from`, `to`, `mode`); what is enough: prose (`requires`, `results`) judged by the agent | decided (owner) |
+| O2 | A non-code task goes Review → Done directly (the result is checked at review), or back to To Do / Fix with a comment | decided (owner) |
+| O3 | A `confirm` move is confirmed by the user's next prompt after the agent's question in chat — the guard as it is; no question tool | decided (owner) |
+| O4 | Dev-status endpoint and coverage on the organization's Jira (Cloud vs Server, which apps) | checked live in T1 (Jira Cloud): `/rest/dev-status/latest/issue/summary?issueId=` answers and counts pull requests per integration app; `/issue/detail` with `applicationType=GitHub` returned none for tasks the summary counts PRs on — the PRs come through a third-party git integration app whose `applicationType` differs. Settled in T2 (live): the summary's `pullrequest.byInstanceType` / `branch.byInstanceType` keys are the `applicationType` values (a third-party app's is its own id, e.g. `oAuth-<app id>`); `/issue/detail?applicationType=<that key>&dataType=pullrequest` answers `detail[]` of `{ pullRequests[], branches[], repositories[] }`, a PR as `{ id, name, status (OPEN / MERGED / DECLINED), url, source.branch, destination.branch, repositoryName, repositoryUrl }`, a branch as `{ name, url (…/tree/<branch>), repository }`. `applicationType=GitHub` answers an empty `detail` for the same tasks; a bad issue id answers 400. The tool reads the detail once per type the summary names |
 | O5 | "Since entering the current status" — from the changelog; the status entered several times | decided in T1: the **last** entry (checked live on a task that entered In Progress twice); no entry in the changelog (created in the status) → every comment |
-| O6 | `project-init` and `repos add` go through the write guard | decided (owner, 2026-10-19) |
-| O7 | The same rules for `github-issues` / `gitlab-issues` after Jira, not with it | decided (owner, 2026-10-19) |
-| O8 | A task leaving Review without an epic gets the best-fitting open epic of the project, chosen by the agent, confirmed with the move | decided (owner, 2026-10-19) |
-| O9 | A second, explicit repository set where PRs are possible but rare, searched only on the user's request | decided (owner, 2026-10-19): `extended_repos`, `--extended` — ADR 0001 D08 |
+| O6 | `project-init` and `repos add` go through the write guard | decided (owner) |
+| O7 | The same rules for `github-issues` / `gitlab-issues` after Jira, not with it | decided (owner) |
+| O8 | A task leaving Review without an epic gets the best-fitting open epic of the project, chosen by the agent, confirmed with the move | decided (owner) |
+| O9 | A second, explicit repository set where PRs are possible but rare, searched only on the user's request | decided (owner): `extended_repos`, `--extended` — ADR 0001 D08 |
 | O10 | General epics named by role, so the dry run can tell them apart | decided (owner): flat `epic_roles`; the rule stays prose in `epics` — ADR 0001 D09 |
 | O11 | The best epic by topic is another project's | decided (owner): explicit `epic_projects`; the agent ranks; a link-only pick is a same-project parent plus `Relates` — ADR 0001 D10 |
 | O12 | PRs and commits that carry a bare number, not the key | decided (owner): `number_repos` (a repository's numbers belong to one project) and literal `number_patterns`; no organization-wide search — ADR 0001 D11 |
@@ -473,7 +473,7 @@ As built for Jira in T3 (no decision changed; where the code differs from the st
 
 ## To verify
 
-- Jira, checked live in T1 (2026-10-19, Jira Cloud, read-only):
+- Jira, checked live in T1 (Jira Cloud, read-only):
   - `/rest/api/3/issue/{key}/changelog` pages with `startAt`/`maxResults`/`total`/`isLast` and
     `values[]` of `{ created, items[] }`, a status item carrying `field`/`fieldId` `status` and
     `fromString`/`toString` — used (`expand=changelog` on the issue also answered; it does not page,
@@ -487,7 +487,7 @@ As built for Jira in T3 (no decision changed; where the code differs from the st
   - Dev-status: see O4 (settled in T2).
   - Still open: posting a comment within `POST /transitions` (`update.comment`) — T1 posts the
     comment as a separate call after the move instead.
-- GitHub, checked live in T2 (2026-10-19, github.com, read-only):
+- GitHub, checked live in T2 (github.com, read-only):
   - A PR by URL: REST `/repos/{owner}/{name}/pulls/{n}` — `state` open/closed, `merged_at`,
     `draft`, `head.ref`, `title`. Used.
   - The pool: one GraphQL request per repository. `repository.refs(refPrefix: "refs/heads/",

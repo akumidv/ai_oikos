@@ -38,3 +38,11 @@ The connector acts as the Slack user who connected it — "my messages", "mentio
 
 Show the channel (or thread) and the exact text; post only after the user confirms. Pick the
 channel by the organization's rules (its resource note); ask when unsure. Write in the language the channel uses.
+
+## People key
+
+In the people file (`.local/private.yaml`, `accounts:`) a person's Slack account is under the key
+**`slack`**; its value is the Slack member ID (`U01EXAMPLE`), used for a mention (`<@U01EXAMPLE>`) and
+to search by author. Not in the file: look the person up with the connector's user search (by name
+or email) — several matches mean ask, never pick — and offer `people add`
+([notes](../../notes/SKILL.md) § Resolving a person). One workspace per installation.

@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { lookup, localEnvFile } from '../common/env.mjs';
 import { CORE_ROOT, INSTALL_FILE, installRoot, installProblem } from '../common/paths.mjs';
 import { catalogFile, loadCatalog, summaryLines } from '../catalog/cli.mjs';
+import { loadAgents } from '../common/landscape.mjs';
 import { neededKeys } from '../setup/tokens.mjs';
 import { print } from './common.mjs';
 
@@ -40,6 +41,13 @@ export function run() {
     message = `oikos is not fully set up in this installation (missing: ${missing.join(', ')}). `
       + 'Follow oikos/BOOTSTRAP.md § Set up; `node oikos/tools/setup/cli.mjs status` shows what is left.';
     context.push(message);
+  }
+  // The roster of standing agents (ADR 0006): akmon's own roster line sees only the project root's
+  // agents/, so the installation's session says which of oikos's agents are switched on.
+  const on = loadAgents().agents.filter((a) => a.enabled);
+  if (on.length) {
+    context.push(`Standing agents switched on here (agents: in ${INSTALL_FILE}) — start one by naming it, or read its charter:\n`
+      + on.map((a) => `- ${a.dir}: ${String(a.description).split(/(?<=\.)\s/)[0].slice(0, 160)} (${a.file})`).join('\n'));
   }
   const catalog = catalogFile();
   if (existsSync(catalog)) {

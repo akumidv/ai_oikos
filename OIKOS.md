@@ -24,7 +24,7 @@ happens in the oikos repository (its `AGENTS.md` and `DEVELOPMENT.md`), not in a
 |---|---|---|
 | Rules, skills, connectors, tools | oikos — `oikos/` in the installation (public) | everyone |
 | How the organization's knowledge and documents are kept (`AGENTS.md`, imports this file); the organization, its connectors, settings, MCP servers and brand (`oikos.yaml`); its resources (`resources/`, `LANDSCAPE.md`) | the installation's root (its own, private repository if any) | the organization's people |
-| This machine's paths (`AGENTS.md`: the vault, the memory note), the user's catalog of counterparties and folders (`catalog.yaml`), a personal backlog, personal working material — notes, drafts, a CV under work — under any name that does not start with `.`; the stores the tools keep under dot names, closed to the agent: tokens (`.env`), sign-ins (`.secrets/`), the shared browser's profile (`.browser/`) | the installation's `.local/` (git-ignored as a whole) | this machine's user |
+| This machine's paths (`AGENTS.md`: the vault, the memory note), the user's catalog of counterparties and folders (`catalog.yaml`), the people they work with — aliases, emails, tracker accounts (`private.yaml`: personal data by design, never committed, looked up before a tracker search and added to after one), a personal backlog, personal working material — notes, drafts, a CV under work — under any name that does not start with `.`; the stores the tools keep under dot names, closed to the agent: tokens (`.env`), sign-ins (`.secrets/`), the shared browser's profile (`.browser/`) | the installation's `.local/` (git-ignored as a whole) | this machine's user |
 | Knowledge, final documents, personal agent memory | where the installation's `AGENTS.md` says (a vault, a knowledge base) | the user and their organization |
 
 **oikos's own files are not changed in ordinary work** — only the installation's files and the
@@ -63,6 +63,7 @@ The skills are `oikos/skills/<name>/SKILL.md`, one per kind of work, in groups:
 | files | `documents`, `catalog` |
 | web | `browser` |
 | hr | `cv`, `footprint` |
+| ongoing | `notes` (notes from chats and discussions, kept as said, turned into tasks) |
 
 The agent host is given a pointer to each one (`.claude/skills/`, `.qwen/skills/` of
 the installation, written by `node oikos/tools/sync/cli.mjs`), lists them with their triggers and
@@ -76,6 +77,18 @@ no connector. A connector's tool runs only in an installation that lists it ther
 stops before any credential, so a token exported in the shell never works for an organization that
 does not use the connector, and only a listed connector's token is asked for. `node oikos/tools/landscape/cli.mjs skills`
 shows every skill, by group, with its connectors and the ones used here (`skills <name>` for one).
+
+## Standing agents
+
+An **agent** is a thin charter over skills for work that goes on in one long session:
+`oikos/agents/<name>/README.md` says its mission, the skills it uses, the folder of `.local/` it
+owns, what it never does, how it starts and how it closes a unit of work. It has no permissions
+of its own — the guards of the tools hold — and it follows its skills' rules. The installation
+switches one on with `agents: [<name>]` in `oikos.yaml`; `sync` then writes a pointer to it next
+to the skills' pointers, and the session-start hook names it. `node oikos/tools/landscape/cli.mjs agents`
+lists the agents and whether each is on here. The first is `desk`: it keeps notes from chats and
+discussions and, after the user agrees, turns them into tracker tasks and messages (skill `notes`,
+tool `desk`; state in `.local/desk/`; optional `desk: { warm_days, cold_days }` in `oikos.yaml`).
 
 **Running the tools.** Every tool runs as `node oikos/tools/<tool>/cli.mjs …` from the
 installation's root: a tool finds the installation from where it runs (or from `OIKOS_HOME`), never
@@ -105,13 +118,14 @@ organization's systems is English and never mentions oikos, its files or command
 (`oikos.yaml`, `node oikos/tools/…`, `skills/<skill>/`), a path of this machine (`/home/<name>/`,
 `/tmp/`, the scratchpad, `.local/`, `file://`), a token or key, or a word of the installation's
 own list (`terms:` in `.local/outgoing.yaml`). Every tool write checks its text — titles, bodies,
-comments, a `--file`'s content, an image's name and alt text, a text attachment — in the dry run
+comments, labels, the pull request lines a move adds to its comment, a `--file`'s content, an image's name and alt text, a text attachment — in the dry run
 and the real run alike: the dry run lists each flagged line (`CHECK`, a secret masked) and exits 3
 with `flagged: content check:`; the real run refuses with exit 3 and `refused: content check:`.
 Fix the text; when a finding is meant (a path the reader needs), show it to the user and, once
 they agree, add `--allow-flagged` to both the dry run and the write (`--allow-non-english` covers
-non-English text only). A secret is never posted: the flag does not cover it. A line the
-installation always lets through goes under `allow:` in `.local/outgoing.yaml` (literal strings).
+non-English text only; Greek letters in a formula are not flagged). A secret is never posted: the flag does not cover it. A line the
+installation always lets through goes under `allow:` in `.local/outgoing.yaml` (literal strings; a
+secret passes only an entry that contains the secret itself).
 What an image, an office file or a PDF carries is not read — look at it before attaching. Routes
 no tool writes — the messenger, a mail draft, a form in the shared browser, a vault note to be
 shared — follow the same rule: run the draft through `node oikos/tools/outgoing/cli.mjs check
@@ -180,18 +194,21 @@ outside the default permission mode denies, so the user runs it with `! git push
   `--replace`), writes a `HANDOFF.md` skeleton when there is none, sets the task's line in
   `.local/TASKS.md` (`- PROJ-123 · <title> · parked · [handoff](proj-123/HANDOFF.md)`) and prints
   the prompt that resumes it. Then fill `HANDOFF.md` under its headings — Where things are, Agreed
-  rules, Decisions, Next steps, How to start. `list` shows the parked packages.
+  rules, Decisions, Next steps, How to start. `list` shows the parked packages. The `desk` agent's
+  state is not a package: it is its own topics in `.local/desk/` (a card per topic, `desk index`),
+  moved between machines by copying that folder.
 - Without the tool, do the same by hand: copy the session's working files to
   `.local/<task-key-lowercase>/` (a working folder: its name never starts with `.` and is never a
   closed store's — `browser`, `google` — or the next session cannot read it; only files from the
-  installation or the scratchpad, never an `.env*` file, a closed store or a dot-named entry outside
+  installation or this installation's session scratchpad (or `$OIKOS_SCRATCH`), never an `.env*` file, a closed store or a dot-named entry outside
   a working folder of `.local/`), write `HANDOFF.md` there under the same headings, and add or
   update the task's line in `.local/TASKS.md`.
 
 ## Shared experience
 
-Short dated entries useful to **every** user: document structures, tracker and sprint
-techniques, pitfalls. Nothing about one organization; experience about developing oikos goes to
-DEVELOPMENT.md.
+Short entries useful to **every** user: document structures, tracker and sprint techniques,
+pitfalls. Nothing about one organization. Experience about developing oikos is not logged: a
+lesson the code needs goes into the code, its tests or the section of DEVELOPMENT.md it concerns,
+and its history stays in git.
 
 - none yet

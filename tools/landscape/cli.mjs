@@ -33,7 +33,24 @@ function printSkill(s, resources) {
     + `${reaches.length ? `\n  resources: ${reaches.join(', ')}` : ''}\n  read: ${s.file}${s.connectors.length ? ', then connectors/<connector>.md' : ''}\n`);
 }
 
+/** One agent of the `agents` overview: what it does, the skills it uses, what it owns, whether it is on here. */
+function printAgent(a) {
+  console.log(`${a.dir} — ${a.description}\n  skills: ${a.skills.join(', ')} · owns: .local/${a.owns}/\n  switched on here: ${a.enabled ? 'yes' : 'no (agents: in oikos.yaml)'}\n  read: ${a.file}\n`);
+}
+
 const commands = {
+  agents: {
+    help: 'the standing agents: what each does, the skills it uses, what it owns and whether this installation switches it on [name…]',
+    options: {},
+    run(v, names) {
+      const { agents, problems } = loadLandscape();
+      const shown = pick(agents, 'dir', names, 'agent');
+      if (v.json) return printJson(shown);
+      if (!agents.length) console.log('No standing agents in this oikos.');
+      for (const a of shown) printAgent(a);
+      warn(problems);
+    },
+  },
   resources: {
     help: 'the organization\'s resources (resources/): what each is for, the skills that reach it, sign-in [id…]',
     options: {},

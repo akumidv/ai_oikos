@@ -93,7 +93,7 @@ test('github governance: rules, rulesets, protection, environments (an object), 
   assert.ok(fake.calls().every((c) => c.method === 'GET'), 'governance only reads');
 });
 
-test('github governance: protection 404 is reported absent, 403 as needing admin; no CODEOWNERS anywhere', () => {
+test('github governance: protection states — "Branch not protected" is absent, any other 404 and a 403 unreadable; no CODEOWNERS anywhere', () => {
   const dir = installation((t) => t);
   const routes = (protectionAnswer) => [
     { url: API, body: { default_branch: 'main' } },
@@ -103,21 +103,107 @@ test('github governance: protection 404 is reported absent, 403 as needing admin
     { url: `${API}/environments?per_page=100`, status: 404, body: { message: 'Not Found' } },
     { match: '/contents/', status: 404, body: { message: 'Not Found' } },
   ];
-  let fake = withFakeFetch(dir, routes({ status: 404, body: { message: 'Branch not protected' } }));
-  let r = tool(dir, 'github', ['governance', '--repo', 'acme/app', '--branch', 'dev'], { ...GITHUB, ...fake.env }, fake);
+  const run = (answer, extra = []) => {
+    const fake = withFakeFetch(dir, routes(answer));
+    return { fake, r: tool(dir, 'github', ['governance', '--repo', 'acme/app', '--branch', 'dev', ...extra], { ...GITHUB, ...fake.env }, fake) };
+  };
+  const unreadable = 'not readable with this token \\(needs Administration read\\)';
+
+  const first = run({ status: 404, body: { message: 'Branch not protected' } });
+  const { fake } = first;
+  let { r } = first;
   assert.equal(r.status, 0, r.output);
   assert.match(r.stdout, /^github:acme\/app · branch dev \(default main\)$/m);
-  assert.match(r.stdout, /^protection of dev: not protected, or needs admin \(Administration read\)/m);
-  assert.match(r.stdout, /^environments: none, or not available$/m);
+  assert.match(r.stdout, /^protection of dev: none \(GitHub says the branch is not protected\)$/m);
+  assert.match(r.stdout, /^environments: not available: needs Actions read \(verify\) — GitHub answered 404 — Not Found$/m);
   assert.match(r.stdout, /^CODEOWNERS: none \(looked in \.github\/CODEOWNERS, CODEOWNERS, docs\/CODEOWNERS\)$/m);
   assert.equal(fake.calls().filter((c) => c.url.includes('/contents/')).length, 3);
+  ({ r } = run({ status: 404, body: { message: 'Branch not protected' } }, ['--json']));
+  assert.deepEqual(JSON.parse(r.stdout).protection, { state: 'absent' });
 
-  fake = withFakeFetch(dir, routes({ status: 403, body: { message: 'Resource not accessible by personal access token' } }));
-  r = tool(dir, 'github', ['governance', '--repo', 'acme/app', '--branch', 'dev', '--json'], { ...GITHUB, ...fake.env }, fake);
+  // Any other 404 is ambiguous (GitHub answers it for a branch that is protected but hidden from the token): unreadable.
+  ({ r } = run({ status: 404, body: { message: 'Not Found' } }));
+  assert.equal(r.status, 0, r.output);
+  assert.match(r.stdout, new RegExp(`^protection of dev: ${unreadable} — GitHub answered 404 — Not Found$`, 'm'));
+  assert.doesNotMatch(r.stdout, /^protection of dev: none/m, 'an unreadable part is never reported as no protection');
+  ({ r } = run({ status: 404, body: { message: 'Not Found' } }, ['--json']));
+  assert.deepEqual(JSON.parse(r.stdout).protection, { state: 'unreadable', why: 'GitHub answered 404 — Not Found' });
+
+  ({ r } = run({ status: 403, body: { message: 'Resource not accessible by personal access token' } }));
+  assert.match(r.stdout, new RegExp(`^protection of dev: ${unreadable} — refused \\(403\\) — Resource not accessible by personal access token$`, 'm'));
+  ({ r } = run({ status: 403, body: { message: 'Resource not accessible by personal access token' } }, ['--json']));
   assert.equal(r.status, 0, r.output);
   const gov = JSON.parse(r.stdout);
-  assert.deepEqual(gov.protection, { state: 'refused', status: 403, message: 'Resource not accessible by personal access token' });
-  assert.equal(gov.environments.state, 'absent');
+  assert.deepEqual(gov.protection, { state: 'unreadable', why: 'refused (403) — Resource not accessible by personal access token' });
+  assert.deepEqual(gov.environments, { state: 'unreadable', why: 'GitHub answered 404 — Not Found' }, 'a 404 on a part of a read repository is never absent');
+  assert.deepEqual(gov.codeowners, { state: 'absent', looked: ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'] });
+});
+
+test('github governance: CODEOWNERS is absent only on 404 "Not Found"; a 404 about the ref (a mistyped --branch) is unreadable', () => {
+  const dir = installation((t) => t);
+  const routes = (message) => [
+    { url: API, body: { default_branch: 'main' } },
+    { match: '/rules/branches/', body: [] },
+    { url: `${API}/rulesets?includes_parents=true&per_page=100`, body: [] },
+    { match: '/protection', status: 404, body: { message: 'Branch not protected' } },
+    { url: `${API}/environments?per_page=100`, body: { environments: [] } },
+    { match: '/contents/', status: 404, body: { message } },
+  ];
+  const codeowners = (message) => {
+    const fake = withFakeFetch(dir, routes(message));
+    const r = tool(dir, 'github', ['governance', '--repo', 'acme/app', '--branch', 'typo', '--json'], { ...GITHUB, ...fake.env }, fake);
+    assert.equal(r.status, 0, r.output);
+    return { codeowners: JSON.parse(r.stdout).codeowners, probes: fake.calls().filter((c) => c.url.includes('/contents/')).length };
+  };
+  const absent = codeowners('Not Found');
+  assert.deepEqual(absent.codeowners, { state: 'absent', looked: ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'] });
+  assert.equal(absent.probes, 3);
+  const typo = codeowners('No commit found for the ref typo');
+  assert.deepEqual(typo.codeowners, { state: 'unreadable', why: 'GitHub answered 404 — No commit found for the ref typo' });
+  assert.equal(typo.probes, 1, 'an unreadable answer ends the search');
+});
+
+test('github governance: rules and rulesets refused (403) are unreadable and the other parts are still read', () => {
+  const dir = installation((t) => t);
+  const fake = withFakeFetch(dir, [
+    { url: API, body: { default_branch: 'main' } },
+    { url: `${API}/rules/branches/main?per_page=100`, status: 403, body: { message: 'Resource not accessible by integration' } },
+    { url: `${API}/rulesets?includes_parents=true&per_page=100`, status: 403, body: { message: 'Upgrade to GitHub Pro or make this repository public to enable this feature.' } },
+    { url: `${API}/branches/main/protection`, body: protection },
+    { url: `${API}/environments?per_page=100`, body: { total_count: 0, environments: [] } },
+    { url: `${API}/contents/.github/CODEOWNERS?ref=main`, body: '* @acme/core\n' },
+  ]);
+  const r = tool(dir, 'github', ['governance', '--repo', 'acme/app'], { ...GITHUB, ...fake.env }, fake);
+  assert.equal(r.status, 0, r.output);
+  assert.match(r.stdout, /^rules on main: not available: needs Metadata read — refused \(403\) — Resource not accessible by integration$/m);
+  assert.match(r.stdout, /^rulesets: not available: needs Metadata read, or the plan has no rulesets — refused \(403\) — Upgrade to GitHub Pro/m);
+  assert.match(r.stdout, /^protection of main: enforce admins yes/m);
+  assert.match(r.stdout, /^environments: 0$/m);
+  assert.match(r.stdout, /^CODEOWNERS: \.github\/CODEOWNERS — 1 rule\(s\)$/m);
+  assert.doesNotMatch(r.stdout, /^(rules on main|rulesets): (0|none)/m);
+  const json = tool(dir, 'github', ['governance', '--repo', 'acme/app', '--json'], { ...GITHUB, ...fake.env }, fake);
+  const gov = JSON.parse(json.stdout);
+  assert.deepEqual(gov.rules, { state: 'unreadable', why: 'refused (403) — Resource not accessible by integration' });
+  assert.equal(gov.rulesets.state, 'unreadable');
+  assert.equal(gov.protection.state, 'ok');
+});
+
+test('github governance: CODEOWNERS refused (403) is unreadable and ends the search', () => {
+  const dir = installation((t) => t);
+  const fake = withFakeFetch(dir, [
+    { url: API, body: { default_branch: 'main' } },
+    { url: `${API}/rules/branches/main?per_page=100`, body: [] },
+    { url: `${API}/rulesets?includes_parents=true&per_page=100`, body: [] },
+    { url: `${API}/branches/main/protection`, status: 404, body: { message: 'Branch not protected' } },
+    { url: `${API}/environments?per_page=100`, body: { total_count: 0, environments: [] } },
+    { url: `${API}/contents/.github/CODEOWNERS?ref=main`, status: 403, body: { message: 'Resource not accessible by personal access token' } },
+  ]);
+  const r = tool(dir, 'github', ['governance', '--repo', 'acme/app'], { ...GITHUB, ...fake.env }, fake);
+  assert.equal(r.status, 0, r.output);
+  assert.match(r.stdout, /^CODEOWNERS: refused \(403\) — Resource not accessible by personal access token$/m);
+  const json = tool(dir, 'github', ['governance', '--repo', 'acme/app', '--json'], { ...GITHUB, ...fake.env }, fake);
+  assert.deepEqual(JSON.parse(json.stdout).codeowners, { state: 'unreadable', why: 'refused (403) — Resource not accessible by personal access token' });
+  assert.ok(!fake.calls().some((c) => c.url.includes('/contents/CODEOWNERS')), 'a refusal ends the search');
 });
 
 // == GitHub merged ==

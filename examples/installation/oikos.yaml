@@ -8,6 +8,14 @@ connectors:
   task-tracking: [jira]
   wiki: [confluence]
 
+# Standing agents this installation switches on (agents/<name>/README.md in oikos; ADR 0006).
+agents: [desk]
+
+# The desk agent's retention thresholds, in days since a topic's last activity (these are the defaults).
+desk:
+  warm_days: 30
+  cold_days: 90
+
 settings:
   JIRA_BASE_URL: https://acme.atlassian.net
   GITHUB_ORG: acme-corp

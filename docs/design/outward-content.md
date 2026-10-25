@@ -4,9 +4,9 @@ Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md
 is accepted until the owner says so; accepted commitments then move to ADR blocks and the
 implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md).
 
-**State:** accepted by the owner (2026-10-22); commitments in
+**State:** accepted by the owner; commitments in
 [ADR 0003](../adr/0003-outward-content.md), implementation in `_aitna/TASKS.md` (F16). O1–O5 are
-decided (owner, 2026-10-22). **How to resume:** read § Frame, § Design, then § Open points.
+decided (owner). **How to resume:** read § Frame, § Design, then § Open points.
 
 ## Frame
 
@@ -60,7 +60,7 @@ decided (owner, 2026-10-22). **How to resume:** read § Frame, § Design, then �
 
   | Category | What matches (case-insensitive unless noted) |
   |---|---|
-  | `language` | non-Latin letters (`nonLatinLetters`, moved here) |
+  | `language` | non-Latin letters (`nonLatinLetters`, moved here); Greek letters are not counted — formula symbols (ADR 0003 D02) |
   | `assistant` | the word `oikos`, `oikos.yaml`, `OIKOS.md`, `OIKOS_HOME`, `node oikos/tools/`, `skills/<skill>/`, `SKILL.md` — skill names only in these forms, since `wiki` or `documents` are ordinary words |
   | `path` | `/home/<name>/`, `/Users/<name>/`, `C:\Users\`, `/mnt/<drive>/Users/`, `\\wsl$`, `/tmp/`, `scratchpad`, `.local/`, `file://` |
   | `secret` | `ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` + 36 characters, `github_pat_`, `glpat-`, `xox[abprs]-`, `ATATT`, `AKIA` + 16 (case-sensitive), `-----BEGIN … PRIVATE KEY-----`, a JWT shape `eyJ….eyJ….…` |
@@ -120,11 +120,11 @@ on such a draft before showing it (O5).
 
 | # | Point | State |
 |---|---|---|
-| O1 | Where the installation's word list and allow-list live | decided (owner, 2026-10-22) — `.local/outgoing.yaml` (`terms:`, `allow:`): the terms are often another client's or a personal project's names, and `oikos.yaml` may be shared in the installation's repository with the organization, so listing them there leaks them. Alternative: an `outgoing:` part of `oikos.yaml` for an organization-wide `allow` only |
-| O2 | Allow-list for false positives | decided (owner, 2026-10-22) — literal strings in `allow:`; a finding whose line contains an allowed string is dropped and the dry run counts what was allowed. No regular expressions in the file |
-| O3 | The override flag | decided (owner, 2026-10-22) — `--allow-flagged` (beside `--allow-non-english`); not `--force`, which already means "overwrite lossy content" on jira `comment`, `edit`, `description` |
-| O4 | Whether a flagged dry run exits non-zero | decided (owner, 2026-10-22) — exit 3 with the `refused: content check:` prefix's dry-run form (`flagged: content check:`): the result reads as "would be refused" in every harness, and the guard has recorded the dry run before it runs |
-| O5 | A `secret` finding: overridable, and a read-only `check` command for routes no tool writes | decided (owner, 2026-10-22) — a secret is never overridden by the flag (only an `allow:` entry); `check` as a command of a new `tools/outgoing/cli.mjs` |
+| O1 | Where the installation's word list and allow-list live | decided (owner) — `.local/outgoing.yaml` (`terms:`, `allow:`): the terms are often another client's or a personal project's names, and `oikos.yaml` may be shared in the installation's repository with the organization, so listing them there leaks them. Alternative: an `outgoing:` part of `oikos.yaml` for an organization-wide `allow` only |
+| O2 | Allow-list for false positives | decided (owner) — literal strings in `allow:`; a finding whose line contains an allowed string is dropped and the dry run counts what was allowed — except a `secret`, dropped only by an entry that contains the secret itself (D-ALLOW-SECRET, ADR 0003 D04). No regular expressions in the file |
+| O3 | The override flag | decided (owner) — `--allow-flagged` (beside `--allow-non-english`); not `--force`, which already means "overwrite lossy content" on jira `comment`, `edit`, `description` |
+| O4 | Whether a flagged dry run exits non-zero | decided (owner) — exit 3 with the `refused: content check:` prefix's dry-run form (`flagged: content check:`): the result reads as "would be refused" in every harness, and the guard has recorded the dry run before it runs |
+| O5 | A `secret` finding: overridable, and a read-only `check` command for routes no tool writes | decided (owner) — a secret is never overridden by the flag (only an `allow:` entry that contains it); `check` as a command of a new `tools/outgoing/cli.mjs` |
 
 ## Rejected (candidates)
 

@@ -5,7 +5,9 @@
 // (loadBrand), and their files come from the brand assets folder: OIKOS_BRAND_ASSETS names it,
 // or OIKOS_BRAND_PLUGIN names a Claude plugin skill folder whose assets/ holds it. The `docx`
 // package is this tool's own dependency (tools/documents/package.json), loaded only when the
-// command runs.
+// command runs. It is not pandoc, which is often absent and has no hold on the title page or the
+// brand. Mermaid is not rendered here (mermaid-cli pulls in a Chrome): the sources of the missing
+// figures are written out and the scenario says how to render them.
 //
 // What the note may hold, all optional except a title:
 //   frontmatter `title`, `status` (draft → "(draft)" next to the version)

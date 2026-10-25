@@ -265,21 +265,37 @@ export function workflowLines(statuses, coverage, { configPath, projectKey, erro
 const flowStatus = (status) => (status === ANY ? `"${ANY}"` : status);
 const listsStatus = (value, status) => (Array.isArray(value) ? value : [value]).some((s) => lower(s) === lower(status));
 
-/** The fix of one rule's conflicts: per person-only status it lets a move into or out of, what to change. */
+/** The person-mode rule that lets a move into (`into`) or out of a status pass. */
+const personRuleFor = (into, status) => (into
+  ? `{ from: "${ANY}", to: ${flowStatus(status)}, mode: person }`
+  : `{ from: ${flowStatus(status)}, to: "${ANY}", mode: person }`);
+
+/** The one line for `defaults.default` (no rule of its own) over all its person-only statuses. */
+const defaultsFixes = (personRules) => (personRules.length
+  ? [`set defaults.default to person — or put ${personRules.join(' and ')} into the rules`]
+  : []);
+
+/**
+ * The fix of one rule's conflicts: per person-only status it lets a move into or out of, what to
+ * change. `defaults.default` (no `rule`) gets one line for all its statuses: set it to person, or
+ * put every person rule it needs into the rules.
+ */
 function policyFixes(rule, conflicts, personOnly) {
   const only = new Set(personOnly.map((p) => lower(p.status)));
   const fixes = [];
+  const personRules = [];
   const seen = new Set();
   for (const { from, to } of conflicts) {
     for (const [status, into] of [[to, true], [from, false]]) {
       if (!only.has(lower(status)) || seen.has(`${lower(status)}|${into}`)) continue;
       seen.add(`${lower(status)}|${into}`);
-      const personRule = into ? `{ from: "${ANY}", to: ${flowStatus(status)}, mode: person }` : `{ from: ${flowStatus(status)}, to: "${ANY}", mode: person }`;
-      if (!rule) fixes.push(`set defaults.default to person — or put ${personRule} into the rules`);
+      const personRule = personRuleFor(into, status);
+      if (!rule) personRules.push(personRule);
       else if (listsStatus(into ? rule.to : rule.from, status)) fixes.push(`take ${status} out of its ${into ? 'to' : 'from'} — or put ${personRule} before it`);
       else fixes.push(`put ${personRule} before it`);
     }
   }
+  fixes.push(...defaultsFixes(personRules));
   return [...new Set(fixes)];
 }
 

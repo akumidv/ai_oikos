@@ -14,6 +14,7 @@
 // that is smaller, so a 128k model is never measured against 200k.
 import { openSync, readSync, fstatSync, closeSync, existsSync } from 'node:fs';
 import { print, readState, writeState } from './common.mjs';
+import { config } from '../common/config.mjs';
 
 const DEFAULT_WINDOW = 200_000;
 const BANDS = [0.85, 0.95];
@@ -84,7 +85,9 @@ export function run(payload) {
   writeState(sid, 'context', { band });
 
   const critical = band === BANDS.length - 1;
-  const park = 'park the work package (node oikos/tools/handoff/cli.mjs park --task KEY --from <working files> — .local/<task>/ + HANDOFF.md + its backlog line, see OIKOS.md § Context economy)';
+  // A desk session keeps its state on disk in topics, not in a package: the card of the current topic is its park (ADR 0006).
+  const desk = config().agents.includes('desk') ? ' In a desk session do this first: write the card of the current topic and run `node oikos/tools/desk/cli.mjs index` — the desk is not parked.' : '';
+  const park = `park the work package (node oikos/tools/handoff/cli.mjs park --task KEY --from <working files> — .local/<task>/ + HANDOFF.md + its backlog line, see OIKOS.md § Context economy)${desk}`;
   const advice = critical
     ? `critical — ${park}, then /compact or start a fresh session`
     : `${park}, then choose /compact or a fresh session by how much of the current context the task still needs`;

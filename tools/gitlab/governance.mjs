@@ -166,6 +166,8 @@ export async function gitlabMerged(g, path, since, { limit, notes = false }) {
   const from = Date.parse(`${since}T00:00:00Z`);
   const q = new URLSearchParams({ state: 'merged', updated_after: `${since}T00:00:00Z`, order_by: 'updated_at', sort: 'desc' });
   const rows = await g.paged(`${p}/merge_requests?${q}`, limit);
+  // `updated_after` also returns merge requests merged before `since` and touched since: keep those
+  // whose merged_at is on or after it.
   const merged = rows.filter((mr) => mr.merged_at && Date.parse(mr.merged_at) >= from).sort((a, b) => Date.parse(a.merged_at) - Date.parse(b.merged_at));
   const mergeRequests = [];
   for (const mr of merged) {

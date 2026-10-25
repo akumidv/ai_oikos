@@ -31,8 +31,10 @@ node oikos/tools/gitlab-wiki/cli.mjs replace-section --page "Release Notes" --he
 ```
 
 - Run `info` (or `read`) before every write: it confirms the page, its format and its content hash.
-- Bodies are markdown, written as given. Content is **English** — the tool refuses non-Latin text
-  unless `--allow-non-english` is passed.
+- Bodies are markdown, written as given. Titles, headings and bodies go through the one content
+  check (OIKOS.md, *What goes out*): the dry run lists each flagged line and exits 3, the real run
+  refuses (`refused: content check:`) unless `--allow-flagged` (or `--allow-non-english`) is in
+  the command, dry run and write alike; a secret is never overridable.
 - `create` makes a markdown page and refuses (exit 3) when the slug exists. `--parent` puts the
   page under that path: the slug becomes `parent/Title` (GitLab makes a nested page from a title
   with `/`, and the slug from the title with spaces as hyphens — unverified until checked live). A
@@ -81,3 +83,8 @@ and names the missing keys, before any request. `whoami` warns when the token ha
   wiki's web interface.
 - **Writing a page in another format than markdown** — a person edits it in GitLab.
 - **`search --mine`** (pages I edited) — not offered; GitLab's wiki history is in the web interface.
+
+## People key
+
+A GitLab username is the key **`gitlab`** in the people file
+([gitlab-issues](../../task-tracking/connectors/gitlab-issues.md) § People key).

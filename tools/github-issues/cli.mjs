@@ -10,6 +10,9 @@ import { guardOutgoing, outgoingRules } from '../common/outgoing.mjs';
 import { githubClient, githubEndpoints } from '../common/github.mjs';
 import { HttpError } from '../common/http.mjs';
 import { envValue } from '../common/env.mjs';
+import { config } from '../common/config.mjs';
+import { INSTALL_FILE } from '../common/paths.mjs';
+import { statusPolicyRefusal, trackerProblems } from '../common/transitions.mjs';
 
 const TOOL = 'node oikos/tools/github-issues/cli.mjs';
 const DEFAULT_MAX = 50;
@@ -209,8 +212,43 @@ function statusPolicy(s) {
   };
 }
 
+/** The names of an issue's labels (REST gives objects, some routes plain names). */
+const labelTexts = (labels) => (labels || []).map((l) => l.name || l);
+
 /** The labels of an issue that are a known status (agent or review). */
-const statusLabels = (labels, policy) => (labels || []).map((l) => l.name || l).filter((n) => policy.isKnown(n));
+const statusLabels = (labels, policy) => labelTexts(labels).filter((n) => policy.isKnown(n));
+
+// The organization's tracker policy (ADR 0004, D-POLICY-HOSTS): `task-tracking.github-issues` of
+// oikos.yaml, `policy.person_only` in `defaults` and in the project of the issue's repository
+// (`projects.<owner/repo>`). A status it names is never moved into or out of by an agent, whatever
+// GITHUB_AGENT_STATUSES lists; `confirm` does not satisfy it (no rule of this tool is `confirm`).
+const TRACKER = 'task-tracking.github-issues';
+
+/** The `task-tracking.github-issues` part, checked at load: a usage error naming each problem. */
+function trackerPart() {
+  const part = config()['task-tracking']?.['github-issues'];
+  const problems = trackerProblems(part, TRACKER);
+  if (problems.length) throw new UsageError(`${INSTALL_FILE} has problems in ${TRACKER} — fix them first: ${problems.join('; ')}`);
+  return part;
+}
+
+/**
+ * Refuse (exit 3, `refused: policy:`) a change that moves into, out of or touches a person-only
+ * status of the policy: `names` are the statuses or status labels involved, `what` the change as a
+ * sentence subject, `full` the repository whose policy holds, `yourself` what the user does instead.
+ * Before anything is sent; the same in a dry run and a real run.
+ */
+function refusePersonOnly(names, s, { full, url, what, yourself }) {
+  const agent = { setting: 'GITHUB_AGENT_STATUSES', statuses: s.agent };
+  const message = statusPolicyRefusal(trackerPart(), full, names, { path: TRACKER, what, agent });
+  if (message) throw new Refusal(`${message} — ${yourself}: ${url}`);
+}
+
+/** A new issue starts in no person-only status: not by --status, and, with labels as statuses, not by a status label. */
+function refuseStart(v, s, full) {
+  const names = [...(v.status ? [v.status] : []), ...(s.project ? [] : splitList(v.labels))];
+  refusePersonOnly(names, s, { full, url: `${s.serverUrl}/${full}`, what: `creating this issue in ${full} is a person's move`, yourself: 'create the issue yourself' });
+}
 
 // == Projects v2 ================================================================================
 
@@ -735,6 +773,9 @@ async function createLabels(g, full, missing) {
   for (const name of missing) await g.api(`/repos/${full}/labels`, { method: 'POST', body: { name } });
 }
 
+/** The labels in one of `a`, `b` and not the other (compared case-insensitively). */
+const setDifference = (a, b) => [...a.filter((n) => !b.some((m) => lower(m) === lower(n))), ...b.filter((n) => !a.some((m) => lower(m) === lower(n)))];
+
 /**
  * In label mode the status labels move only through `transition`: an edit that adds, removes or
  * (by --labels) changes a status label is refused. A new issue may carry an agent status only.
@@ -742,6 +783,8 @@ async function createLabels(g, full, missing) {
 function statusLabelGuard(s, ref, current, { set, add = [], remove = [] }) {
   if (s.project) return;
   const policy = statusPolicy(s);
+  const changed = [...add, ...remove, ...(set ? setDifference(current, set) : [])];
+  refusePersonOnly(changed, s, { full: ref.full, url: issueUrl(s, ref), what: `changing these labels of ${ref.key} is a person's move`, yourself: `change ${ref.key} yourself` });
   const touched = [...add, ...remove].filter((n) => policy.isKnown(n));
   if (set) {
     const before = statusLabels(current, policy).map(lower).sort().join();
@@ -816,12 +859,15 @@ const addSubIssue = (g, parent, childId) => g.api(`/repos/${parent.full}/issues/
  */
 async function movePlan(g, s, ref, issue, to, policy) {
   const url = issueUrl(s, ref);
+  // The status the issue is in is not an agent's to leave when the organization's policy names it.
+  const leave = (froms) => refusePersonOnly(froms, s, { full: ref.full, url, what: `moving ${ref.key} out of its status is a person's move`, yourself: `move ${ref.key} to '${to}' yourself` });
   const notOpen = (from) => new Refusal(`${ref.key} is '${from}', not a status open to an agent (${s.agent.join(', ')}) — from there only a person moves it: ${url}`);
   if (s.project) {
     const project = await loadProject(g, s);
     const option = statusOption(project, to, policy);
     const { item } = await issueInProject(g, ref, project);
     if (!item) throw new UsageError(`${ref.key} is not in project ${project.number} "${project.title}", so it has no Status there — add it with move-to-sprint --add-to-project, or in GitHub: ${project.url}`);
+    leave([item.status]);
     if (item.status && !policy.isAgent(item.status)) throw notOpen(item.status);
     return {
       kind: 'project', source: `project ${project.number} "${project.title}" field Status`, from: item.status, to: option.name,
@@ -829,6 +875,7 @@ async function movePlan(g, s, ref, issue, to, policy) {
       project, itemId: item.id, fieldId: project.status.id, optionId: option.id,
     };
   }
+  leave(labelTexts(issue.labels)); // in label mode a label named like a person-only status is the issue's status
   const current = statusLabels(issue.labels, policy);
   if (current.length > 1) throw new UsageError(`${ref.key} carries several status labels (${current.join(', ')}) — a person settles it: ${url}`);
   const from = current[0] || null;
@@ -938,13 +985,14 @@ Object.assign(commands, {
       const full = targetRepo(v, s);
       const policy = statusPolicy(s);
       const body = v.file ? readFileSync(v.file, 'utf8') : v.description;
-      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: body }]);
+      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: body }, { label: 'labels', text: v.labels }]);
       if ((v.status || v.sprint) && !v['add-to-project']) throw new UsageError('--status and --sprint set fields of the project: pass --add-to-project too');
       if (v['add-to-project'] && !s.project) throw new UsageError('--add-to-project adds the issue to the project in GITHUB_PROJECT: set it (the organization project number) in oikos.yaml settings');
+      refuseStart(v, s, full);
+      const wanted = splitList(v.labels);
       if (v.status && (CLOSING.test(v.status.trim()) || !policy.isAgent(v.status))) {
         throw new Refusal(`a new issue starts only in a status open to an agent (${s.agent.join(', ')}), not '${v.status}'`);
       }
-      const wanted = splitList(v.labels);
       const parent = v.parent ? parseTask(v.parent, s) : null;
       const g = gh();
       const repos = await guardRepos(g, s, [full, ...(parent ? [parent.full] : [])]);
@@ -1004,7 +1052,10 @@ Object.assign(commands, {
         throw new Refusal(`--state: an agent never closes or reopens an issue — that is a person's move${links}`);
       }
       const body = v.file ? readFileSync(v.file, 'utf8') : v.description;
-      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: body }]);
+      checkContent(v, [
+        { label: 'summary', text: v.summary }, { label: 'description', text: body },
+        { label: 'labels', text: v.labels }, { label: 'add-labels', text: v['add-labels'] },
+      ]);
       const setLabels = v.labels !== undefined ? splitList(v.labels) : null;
       const add = splitList(v['add-labels']);
       const remove = splitList(v['remove-labels']);
@@ -1116,7 +1167,7 @@ Object.assign(commands, {
   },
 
   transition: {
-    help: 'move an issue among the statuses open to an agent only (GITHUB_AGENT_STATUSES; the project Status field, else labels; --task, --to, --dry-run); never closes or reopens',
+    help: 'move an issue among the statuses open to an agent only (GITHUB_AGENT_STATUSES; the project Status field, else labels; --task, --to, --dry-run); never closes or reopens, and never moves into or out of a person_only status of the policy in task-tracking.github-issues (refused: policy:)',
     options: { task: { type: 'string' }, to: { type: 'string' }, 'dry-run': { type: 'boolean' } },
     run: guarded(async (v) => {
       required(v, 'task', 'to');
@@ -1124,6 +1175,7 @@ Object.assign(commands, {
       const ref = parseTask(v.task, s);
       const policy = statusPolicy(s);
       const url = issueUrl(s, ref);
+      refusePersonOnly([v.to], s, { full: ref.full, url, what: `moving ${ref.key} to '${v.to}' is a person's move`, yourself: `move ${ref.key} to '${v.to}' yourself` });
       if (CLOSING.test(v.to.trim())) throw new Refusal(`an agent never closes or reopens an issue — '${v.to}' is a person's move: ${url}`);
       if (!policy.isAgent(v.to)) throw new Refusal(`an agent moves an issue only among ${s.agent.join(', ')} — move ${ref.key} to '${v.to}' yourself: ${url}`);
       // Even the dry run reads the visibility, the issue and its current status.

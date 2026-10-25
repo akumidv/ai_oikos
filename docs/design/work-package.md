@@ -4,9 +4,9 @@ Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md
 is accepted until the owner says so; accepted commitments then move to ADR blocks and the
 implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md).
 
-**State:** accepted by the owner (2026-10-22); commitments in
+**State:** accepted by the owner; commitments in
 [ADR 0005](../adr/0005-work-package.md), implementation in `_aitna/TASKS.md` (F18). O1–O4 are
-decided (owner, 2026-10-22). The hook's advice and OIKOS.md § Context economy (ADR 0005 D04, D05)
+decided (owner). The hook's advice and OIKOS.md § Context economy (ADR 0005 D04, D05)
 were implemented ahead of the ADR (item 9, owner-approved). Depends on OIKOS.md agreeing with
 [ADR 0002](../adr/0002-local-stores.md) (open `.local/` folders hold working material and drafts),
 which is being reconciled separately. **How to resume:** read § Frame, § Design, then § Open points.
@@ -108,8 +108,10 @@ node oikos/tools/handoff/cli.mjs list          # parked packages: TASKS.md lines
   exists with other content is refused unless `--replace` (never a silent overwrite of a filled
   file).
 - What `--from` may name is limited as `attach` limits its files, by the secret guard's rules: the
-  real path (symlinks followed; each file of a folder judged) lies inside the installation or the
-  session scratchpad; a home or network path (`~/.ssh`, `~/.aws`, `~/.config`, `\\host`), a closed
+  real path (symlinks followed; each file of a folder judged) lies inside the installation or a
+  scratch folder — `$OIKOS_SCRATCH`, or this installation's Claude Code session scratchpad
+  `<tmp>/claude-<uid>/<slug>/<session>/scratchpad` (ADR 0005 D02, D-PARK-SCRATCH), not the rest of
+  the temporary folder; a home or network path (`~/.ssh`, `~/.aws`, `~/.config`, `\\host`), a closed
   store of `.local/`, an `.env*` file, or a dot-named entry outside an open `.local/` folder is
   refused. One refused entry refuses the park before anything is copied. The secret guard sees
   only the command's tokens, not what a folder holds, so the tool checks itself: a copy into
@@ -150,10 +152,10 @@ design docs or proposed ADRs.
 
 | # | Point | State |
 |---|---|---|
-| O1 | Tool form | decided (owner, 2026-10-22) — B: `tools/handoff/cli.mjs` (`park`, `list`) + OIKOS.md section, no skill |
-| O2 | Is `park` a guarded write? | decided (owner, 2026-10-22) — not: it writes only local files, not an external service; preview by default, `--yes` writes (the `catalog add` precedent), so it takes no `--dry-run` and is not listed in `writes.mjs`. It writes only open, git-ignored `.local/` files on this machine and changes no rule that governs a remote write. The alternative — `--dry-run` and a `writes.mjs` entry — makes the user answer a prompt before each park, exactly when the context is short |
-| O3 | The `.local/TASKS.md` line format | decided (owner, 2026-10-22) — the line above (akmon's index shape with the task key as id), upserted by key only |
-| O4 | Work with no tracker key | decided (owner, 2026-10-22) — `--name <slug>` instead of `--task` |
+| O1 | Tool form | decided (owner) — B: `tools/handoff/cli.mjs` (`park`, `list`) + OIKOS.md section, no skill |
+| O2 | Is `park` a guarded write? | decided (owner) — not: it writes only local files, not an external service; preview by default, `--yes` writes (the `catalog add` precedent), so it takes no `--dry-run` and is not listed in `writes.mjs`. It writes only open, git-ignored `.local/` files on this machine and changes no rule that governs a remote write. The alternative — `--dry-run` and a `writes.mjs` entry — makes the user answer a prompt before each park, exactly when the context is short |
+| O3 | The `.local/TASKS.md` line format | decided (owner) — the line above (akmon's index shape with the task key as id), upserted by key only |
+| O4 | Work with no tracker key | decided (owner) — `--name <slug>` instead of `--task` |
 | O5 | Resume from a package | decided by convention: the printed prompt; no `resume` command until a need shows |
 
 ## Rejected (candidates)
@@ -176,6 +178,6 @@ design docs or proposed ADRs.
 - `context-pressure.mjs`: name the `park` command in the advice once it exists.
 - OIKOS.md: the template's headings, the command beside the manual convention.
 - Tests: key → folder, slug, refusal of dot and legacy store names (`browser`, `Google`), refusal of
-  `~/.ssh`, a path outside the installation and scratchpad, an `.env*` inside a copied folder, a
+  `~/.ssh`, a path outside the installation and its scratchpad (another project's, a loose temp file), an `.env*` inside a copied folder, a
   closed store, conflict without `--replace`, the line upsert
   (replace, append, create), an existing `HANDOFF.md` kept, preview changes nothing.

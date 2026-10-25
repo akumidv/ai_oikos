@@ -68,3 +68,8 @@ protected branches and some merge settings may need **Maintainer** on the projec
 does not see is left out); the project's approval settings and approval rules need **Premium** (or
 Ultimate) and answer 403 or 404 without it; the approvals of a merge request (`approved_by`) are
 read on every tier.
+
+## People key
+
+A person's GitLab username is in the people file under the key **`gitlab`** (the same key as the
+issues connector: [gitlab-issues](../../task-tracking/connectors/gitlab-issues.md) § People key).

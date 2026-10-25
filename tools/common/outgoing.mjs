@@ -29,18 +29,23 @@ const PATTERNS = Object.freeze({
     /\/home\/[^/\s]+\//i, /\/Users\/[^/\s]+\//i, /\bC:\\Users\\/i, /\/mnt\/[a-z]\/Users\//i, /\\\\wsl\$/i,
     /\/tmp\//i, /scratchpad/i, /\.local\//i, /file:\/\//i,
   ],
-  // Case-sensitive: the providers' prefixes are, and a token's body follows its prefix.
+  // Case-sensitive: the providers' prefixes are, and a token's body follows its prefix. A fixed-length
+  // token has no closing boundary: one followed by more characters is still a token.
   secret: [
-    /\bgh[pousr]_[A-Za-z0-9]{36}\b/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\bglpat-[A-Za-z0-9_-]{20,}/,
-    /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\bATATT[A-Za-z0-9_=-]{20,}/, /\bAKIA[0-9A-Z]{16}\b/,
+    /\bgh[pousr]_[A-Za-z0-9]{36}/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\bglpat-[A-Za-z0-9_-]{20,}/,
+    /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\bATATT[A-Za-z0-9_=-]{20,}/, /\bAKIA[0-9A-Z]{16}/,
     /-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
   ],
 });
 
+// Every match of every secret pattern on a line, not only the first: the allow: rule and the masking need all.
+const GLOBAL_SECRETS = PATTERNS.secret.map((pattern) => new RegExp(pattern.source, 'g'));
+
 /**
  * @typedef {object} OutgoingRules
  * @property {string[]} terms fixed strings to keep out (category `term`), matched ignoring case
- * @property {string[]} allow literal strings: a finding on a line that contains one is dropped
+ * @property {string[]} allow literal strings: a finding on a line that contains one is dropped, except a
+ *   `secret` finding, dropped only by an entry that contains the matched secret text itself (D-ALLOW-SECRET)
  * @property {string|null} source the file the words came from, or null for the built-ins only
  */
 
@@ -81,10 +86,13 @@ export function outgoingRules(root = installRoot()) {
   return Object.freeze({ terms: list('terms'), allow: list('allow'), source: OUTGOING_FILE });
 }
 
-/** Non-Latin letters in text (Cyrillic etc.), sorted, each once — outgoing text is English. */
+/**
+ * Non-Latin letters in text (Cyrillic etc.), sorted, each once — outgoing text is English. Greek
+ * letters are not counted: they are the symbols of a formula (α, Δt, σ), not a language (ADR 0003 D02).
+ */
 export function nonLatinLetters(text) {
   const found = new Set();
-  for (const ch of text) if (/\p{L}/u.test(ch) && ch.codePointAt(0) > 0x024f) found.add(ch);
+  for (const ch of text) if (/\p{L}/u.test(ch) && ch.codePointAt(0) > 0x024f && !/\p{Script=Greek}/u.test(ch)) found.add(ch);
   return [...found].sort().join('');
 }
 
@@ -95,6 +103,10 @@ function lineMatch(category, line, rules) {
     const lower = line.toLowerCase();
     return rules.terms.find((t) => lower.includes(t.toLowerCase())) ?? null;
   }
+  if (category === 'secret') {
+    const secrets = GLOBAL_SECRETS.flatMap((pattern) => [...line.matchAll(pattern)].map((m) => m[0]));
+    return secrets.find((secret) => !rules.allow.some((a) => a.includes(secret))) ?? null;
+  }
   for (const pattern of PATTERNS[category]) {
     const m = line.match(pattern);
     if (m) return m[0];
@@ -104,7 +116,7 @@ function lineMatch(category, line, rules) {
 
 /**
  * Every finding in `text` under `rules`: one per line and category, a line holding an allowed
- * string left out. Pure.
+ * string left out — except a `secret`, left out only when an allowed string contains the secret. Pure.
  * @param {string} text
  * @param {OutgoingRules} rules
  * @returns {OutgoingFinding[]}
@@ -112,8 +124,9 @@ function lineMatch(category, line, rules) {
 export function outgoingFindings(text, rules) {
   const findings = [];
   for (const [i, line] of String(text ?? '').split('\n').entries()) {
-    if (rules.allow.some((a) => line.includes(a))) continue;
+    const lineAllowed = rules.allow.some((a) => line.includes(a));
     for (const category of CATEGORIES) {
+      if (lineAllowed && category !== 'secret') continue;
       const match = lineMatch(category, line, rules);
       if (match) findings.push({ line: i + 1, category, match, text: line });
     }
@@ -165,10 +178,15 @@ function overridden(finding, values) {
   return Boolean(values['allow-flagged']);
 }
 
-/** One finding as the check prints it: a secret masked, a line shortened. */
+/** `line` with every secret in it masked, so no finding of another category prints one. */
+function maskedLine(line) {
+  return GLOBAL_SECRETS.reduce((text, pattern) => text.replace(pattern, maskSecret), line);
+}
+
+/** One finding as the check prints it: a secret masked, a line masked of any secret and shortened. */
 function findingLine(label, f) {
   if (f.category === 'secret') return `  ${label} line ${f.line}: secret — ${maskSecret(f.match)}`;
-  const line = f.text.trim();
+  const line = maskedLine(f.text.trim());
   return `  ${label} line ${f.line}: ${f.category} — ${f.match}  │ ${line.length > 100 ? `${line.slice(0, 100)}…` : line}`;
 }
 
@@ -219,7 +237,7 @@ const categoriesOf = (findings) => [...new Set(findings.map(({ finding }) => fin
  * except a secret, whose dry run stops before the preview, so the secret never reaches the output.
  * The real run refuses (GuardRefusal, exit 3, `refused: content check: …`) any finding not
  * overridden: `--allow-flagged` overrides every category but `secret`, `--allow-non-english` only
- * `language`; only an `allow:` entry lets a secret's line pass.
+ * `language`; only an `allow:` entry that contains the secret itself lets a secret pass.
  * @param {OutgoingText[]} texts
  * @param {Record<string, unknown>} values the command's parsed flags (`dry-run`, the overrides)
  * @param {OutgoingRules} rules from `outgoingRules()`, read once at the command
@@ -228,7 +246,7 @@ export function guardOutgoing(texts, values, rules) {
   const check = checkOutgoing(texts, rules);
   const open = check.findings.filter(({ finding }) => !overridden(finding, values));
   const secret = open.some(({ finding }) => finding.category === 'secret');
-  const fix = `fix the text${secret ? ' — a secret is never posted; an allow: entry in '
+  const fix = `fix the text${secret ? ' — a secret is never posted; an allow: entry holding it in '
     + `${OUTGOING_FILE} if it is not one` : ', or add --allow-flagged to the command once the user has seen the findings and agrees'}`
     + (!secret && open.every(({ finding }) => finding.category === 'language') ? ' (or --allow-non-english)' : '');
   if (values['dry-run']) {

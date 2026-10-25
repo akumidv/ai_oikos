@@ -118,7 +118,8 @@ test('policy: the ## Policy lines give each conflicting rule its path, moves and
   assert.match(lines, /^## Policy\n {2}Person-only: Review \(defaults\.policy\) — only a person moves a task into or out of them\n {2}Source: https:\/\/kb\.example\.com\/tracker-rules \(defaults\.policy\)/);
   assert.match(lines, /^ {2}task-tracking\.jira\.defaults\.transitions\[0\]: To Do, In Progress, Blocked → To Do, In Progress, Blocked, Review, agent\n {6}To Do → Review\n {6}fix: take Review out of its to — or put \{ from: "\*", to: Review, mode: person \} before it$/m);
   assert.match(lines, /^ {2}task-tracking\.jira\.defaults\.transitions\[2\]: \* → Closed, confirm\n {6}Review → Closed\n {6}fix: put \{ from: Review, to: "\*", mode: person \} before it$/m);
-  assert.match(lines, /^ {2}task-tracking\.jira\.defaults\.default \(agent\)\n {6}Review → To Do, Closed → Review\n {6}fix: set defaults\.default to person — or put \{ from: Review, to: "\*", mode: person \} into the rules\n {6}fix: set defaults\.default to person — or put \{ from: "\*", to: Review, mode: person \} into the rules$/m);
+  assert.match(lines, /^ {2}task-tracking\.jira\.defaults\.default \(agent\)\n {6}Review → To Do, Closed → Review\n {6}fix: set defaults\.default to person — or put \{ from: Review, to: "\*", mode: person \} and \{ from: "\*", to: Review, mode: person \} into the rules$/m);
+  assert.equal(lines.match(/fix: set defaults\.default/g).length, 1, 'one fix line for defaults.default, both steps in it');
   const none = policyLines([], { personOnly: [], sources: [] }, { configPath: 'task-tracking.jira', projectKey: 'DOCS', workflow: true });
   assert.deepEqual(none, ['## Policy', '  No policy in task-tracking.jira (defaults.policy, projects.DOCS.policy): the rules alone decide who moves.']);
 });

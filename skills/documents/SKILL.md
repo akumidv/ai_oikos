@@ -45,6 +45,9 @@ A new typical task gets its own file in `scenarios/` and a row here.
   `from-markdown` (a markdown note → an on-brand .docx in the approved-policy format, `--pdf` too), `install`.
   It needs Node, `npm install` once in the oikos core checkout, LibreOffice for `render` and `--pdf`, and
   the `docx` package for `from-markdown` (`install` shows the plan).
+- A service-completion document is an **acceptance report** in English, never an "act" (a calque
+  that reads as something else). Examples keep to abstract counterparties (`ACME Corp`); the real
+  ones live in the installation's catalog.
 - The Anthropic office skills may expect programs a machine does not have (pandoc, zip,
   Python, LibreOffice). Where one is missing, use `tools/documents` for what it covers rather
   than installing system packages.

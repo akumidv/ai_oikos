@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { runCli, required, printJson, UsageError } from '../common/cli.mjs';
+import { runCli, required, printJson, GuardRefusal, UsageError } from '../common/cli.mjs';
 import { guardOutgoing, outgoingRules, uploadedMarkdown } from '../common/outgoing.mjs';
 import { atlassianCreds, credsComplete, atlassianHelp, atlassianClient, missingCreds } from '../common/atlassian.mjs';
 import {
@@ -627,7 +627,9 @@ async function ruleTransition(v, part, dry) {
     // extended set under --extended (D08) — as its dry run showed.
     const { pullRequests, skip } = await taskPullRequests(jira, d, v.task, resolved.project, {}, { extended: Boolean(v.extended), skip: v['skip-pr'], part });
     skipNotes(v.task, skip);
-    const code = await move(jira, c, { ...v, comment: moveComment(v.comment, pullRequests.pullRequests) }, current, match);
+    const comment = moveComment(v.comment, pullRequests.pullRequests);
+    checkMoveLines(v, v.task, comment);
+    const code = await move(jira, c, { ...v, comment }, current, match);
     // Only a move and comment that went through list "what was found"; a failure has thrown by now.
     incompleteNote(v.task, pullRequests);
     return code;
@@ -934,6 +936,7 @@ async function confirmFacts(jira, { v, d, project, current, resolved, part, proj
   const searchedExtended = Boolean(v.extended);
   const prs = await taskPullRequests(jira, d, v.task, resolved.project, { description, comments, remote }, { extended: searchedExtended, skip: v['skip-pr'], part, hosts });
   const posted = moveComment(v.comment, prs.pullRequests.pullRequests);
+  checkMoveLines(v, v.task, posted);
   return { since, comments, recent, commentTexts, description, epic, remote, urls, searchedExtended, prs, posted };
 }
 
@@ -1197,6 +1200,16 @@ async function batchDryRun(jira, c, v, part, plans) {
 }
 
 /**
+ * A task's failure in a batch move, on stderr, so the other tasks go on: the content check's refusal
+ * of its comment whole, any other failure by its first line; an error that is not a task's goes up.
+ */
+function reportTaskFailure(key, error) {
+  if (error instanceof GuardRefusal) console.error(`${key}: ${error.message}`);
+  else if (taskFailure(error)) console.error(`${key}: ${String(error.message).split('\n')[0]}`);
+  else throw error;
+}
+
+/**
  * The real batch move: per task, the evidence collected again, the move, and a report; a task moved
  * whose comment failed counts as moved and is reported apart. Exit 2 if any move or comment failed.
  */
@@ -1218,6 +1231,7 @@ async function batchMove(jira, c, v, part, keys) {
         skips.push(skip);
         found = pullRequests;
         comment = moveComment(v.comment, pullRequests.pullRequests);
+        checkMoveLines(v, key, comment);
       }
       await transitionOnly(jira, key, current, match);
       moved += 1;
@@ -1235,8 +1249,7 @@ async function batchMove(jira, c, v, part, keys) {
       // Only a move and comment that went through list "what was found".
       if (found) incompleteNote(key, found);
     } catch (e) {
-      if (!taskFailure(e)) throw e;
-      console.error(`${key}: ${String(e.message).split('\n')[0]}`);
+      reportTaskFailure(key, e);
     }
   }
   const misses = batchSkipMisses(v, skips);
@@ -1879,6 +1892,30 @@ function checkContent(v, texts) {
   guardOutgoing(texts, v, outgoingRules());
 }
 
+/** The labels a write sends (`--labels`, `--add-labels`; a removal sends no new text) as one text, a label per line (D-OUT-LABELS). */
+function labelTexts(v) {
+  const labels = [...splitList(v.labels), ...splitList(v['add-labels'])];
+  return labels.length ? [{ label: 'labels', text: labels.join('\n') }] : [];
+}
+
+/**
+ * The lines `moveComment` added to the user's own comment — the pull requests found in the pool —
+ * as a text, or an empty string where it added none. The user's own words are checked apart, up front.
+ */
+function addedMoveLines(comment, posted) {
+  const own = comment ? String(comment).trim() : '';
+  return posted && posted.length > own.length ? posted.slice(own.length).trim() : '';
+}
+
+/**
+ * The content check of the pull request lines a confirm move of `key` adds to its comment (D-OUT-LABELS):
+ * their titles come from a code host, so they are checked like any sent text, before the move.
+ */
+function checkMoveLines(v, key, posted) {
+  const added = addedMoveLines(v.comment, posted);
+  if (added) checkContent(v, [{ label: `${key} pull request lines`, text: added }]);
+}
+
 /** Keys from --task A,B or --jql (capped by --max). */
 async function selectKeys(jira, v) {
   if (v.task) return splitList(v.task);
@@ -2158,7 +2195,7 @@ Object.assign(commands, {
         throw new UsageError(`create does not upload images — the issue does not exist yet: ${imageTargets(description).join(', ')}. ` +
           `Create it without those image lines, then add them with \`${TOOL} description --task <KEY> --append --file …\` (or --section).`);
       }
-      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: description }]);
+      checkContent(v, [{ label: 'summary', text: v.summary }, { label: 'description', text: description }, ...labelTexts(v)]);
       const issueUrl = description ? await siteLinks(jira, c).forText(description) : undefined;
       const fields = { project: { key: v.project }, issuetype: { name: v.type || 'Task' }, ...(await fieldsFrom(jira, v, { issueUrl })) };
       const target = String(v.project).toUpperCase();
@@ -2200,7 +2237,7 @@ Object.assign(commands, {
       const keys = await selectKeys(jira, v);
       const links = siteLinks(jira, c);
       const description = descriptionText(v);
-      checkContent(v, [{ label: 'summary', text: v.summary }, ...uploadedMarkdown('description', description)]);
+      checkContent(v, [{ label: 'summary', text: v.summary }, ...uploadedMarkdown('description', description), ...labelTexts(v)]);
       if (description && !v.force) await guardLossless(jira, keys, links, description);
       if (description && imagePlan(description, v.file).length && keys.length !== 1) {
         throw new UsageError(`the description has image lines, and an image is uploaded to one issue: edit one --task at a time (selected: ${keys.join(', ')})`);

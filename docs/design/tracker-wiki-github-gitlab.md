@@ -4,7 +4,7 @@ Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md
 is accepted until the owner says so; accepted commitments then move to ADR blocks and the
 implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md).
 
-**State:** Q1–Q12 decided by the owner (2026-10-18), all as leaned; implementation waits for
+**State:** Q1–Q12 decided by the owner, all as leaned; implementation waits for
 the owner's go. **How to resume:** read § Frame, then § Open points and § Phasing. API
 claims marked **(TV)** are unverified; § To verify lists them, and phase 1 checks them live.
 
@@ -44,7 +44,7 @@ claims marked **(TV)** are unverified; § To verify lists them, and phase 1 chec
 6. **Guards shape the wiki.** The secret guard blocks shell commands on folders under `.local/`, so
    a wiki working copy there is reachable only by the tool; the git guard sees only the agent's own
    shell, so a push inside a tool is gated by the write guard alone.
-7. **The machine's git identity may belong to another organization** (DEVELOPMENT.md experience):
+7. **The machine's git identity may belong to another organization** :
    wiki commits never use it.
 8. **Precedent:** `jira` and `confluence` are two tools sharing `tools/common/atlassian.mjs`; every
    connector name equals its tool folder.

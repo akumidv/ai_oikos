@@ -58,6 +58,18 @@ project number, owner `GITHUB_ORG`) when it is set, else from **labels** named l
   the new label first, then removes the old one (the dry run says so). The status labels are the
   repository's — the tool does not create them. `edit` refuses to add or remove a status label:
   the status moves through `transition`.
+- **The organization's policy.** This tool reads `task-tracking.github-issues` of `oikos.yaml` for
+  the policy only ([ADR 0004](../../../docs/adr/0004-tracker-policy.md), D-POLICY-HOSTS; the
+  transition rules of that part are not read by this tool). `policy.person_only` — in `defaults`, and
+  in `projects.<owner/repo>` (the issue's repository), which adds to the defaults' — names the
+  statuses only a person moves an issue into or out of. `transition` into or out of one (the
+  project's Status field, or a label named like it) is refused (exit 3, before any change, dry run
+  and real run alike) with `refused: policy:`, naming the status, the policy path and its `source`,
+  and `GITHUB_AGENT_STATUSES` when it lists the status as open to an agent (the policy overrides it);
+  the issue's link is printed for the user. `create --status` into one, and — with labels as statuses —
+  `create --labels` or `edit --labels | --add-labels | --remove-labels` that would add or remove such a
+  label, are refused the same way. A malformed part is a usage error (exit 1) naming the path. No
+  `policy`: behaviour as above. There is no `project-init` for this tool.
 
 ## Boards and sprints
 
@@ -101,8 +113,12 @@ node oikos/tools/github-issues/cli.mjs link --from acme-corp/tools#15 --type blo
 - **Unknown labels** are refused (exit 3): GitHub would create them silently. `--create-labels`
   creates them first, and the dry run says which.
 - A bulk edit by `--query` is capped by `--max` (default 50).
-- Titles, descriptions and comments are English; non-Latin text is refused unless
-  `--allow-non-english`.
+- Titles, descriptions, comments and label text (`--labels`, `--add-labels`, so also the labels
+  `--create-labels` creates; a label name that is flagged, such as an assistant's name, is refused
+  too) go through the one content check (OIKOS.md, *What goes
+  out*): the dry run lists each flagged line and exits 3, the real run refuses
+  (`refused: content check:`) unless `--allow-flagged` (or `--allow-non-english`) is in the
+  command, dry run and write alike; a secret is never overridable.
 - `link --type`: `parent` / `child` are sub-issues, `blocks` / `blocked-by` issue dependencies
   ("blocked by", unverified until checked live). Any other relation: mention it in a comment.
 - Not undoable: notifications, a created issue (deleting needs admin; not offered).
@@ -135,3 +151,11 @@ node oikos/tools/github-issues/cli.mjs link --from acme-corp/tools#15 --type blo
 Permissions (unverified until checked live): fine-grained — repository Issues read/write,
 Metadata read, organization Projects read/write; classic — `repo` + `project`; `gh` —
 `gh auth refresh -s project` for Projects. Never ask for a token in the chat.
+
+## People key
+
+In the people file (`.local/private.yaml`, `accounts:`) a person's GitHub account is under the key
+**`github`**; its value is the login (`ada-l`), as the commands take it (`--assignee`, `--user`).
+The same key serves every GitHub connector (issues, code hosting, wiki). Not in the file: the
+login is what a tool result shows (an author, an assignee) or the user says — never guessed from a
+name; then offer `people add` ([notes](../../notes/SKILL.md) § Resolving a person).

@@ -4,9 +4,9 @@ Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md
 is accepted until the owner says so; accepted commitments then move to ADR blocks and the
 implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md).
 
-**State:** accepted by the owner (2026-10-22); commitments in
+**State:** accepted by the owner; commitments in
 [ADR 0004](../adr/0004-tracker-policy.md), implementation in `_aitna/TASKS.md` (F17). O1–O3 are
-decided (owner, 2026-10-22); O4 (identities) stays open for the future. It extends
+decided (owner); O4 (identities) stays open for the future. It extends
 [ADR 0001](../adr/0001-tracker-transitions.md) D01 and **amends** its D02: in a move the stricter
 of rule and policy wins, so a rule's mode is no longer the last word (ADR 0004 D03). **How to resume:** read § Frame, § Design, then § Open points.
 
@@ -136,11 +136,11 @@ whether identities belong in `oikos.yaml` or in the tracker's own permissions (O
 
 | # | Point | State |
 |---|---|---|
-| O1 | Does a `confirm` move satisfy `person_only`? | decided (owner, 2026-10-22) — no (strict): the move runs under the user's account, but the agent starts it; a person-only move is made by the person in the tracker |
-| O2 | In the move, report only or refuse | decided (owner, 2026-10-22) — refuse as `person` (the stricter of rule and policy wins); report-only lets the conflict run on every move. Refusing amends ADR 0001 D02 (a rule's mode decides a move), with a dated amendment note there |
-| O3 | A project's policy: adds to the defaults' or replaces them | decided (owner, 2026-10-22) — adds (union); an exception would need an explicit key later |
+| O1 | Does a `confirm` move satisfy `person_only`? | decided (owner) — no (strict): the move runs under the user's account, but the agent starts it; a person-only move is made by the person in the tracker |
+| O2 | In the move, report only or refuse | decided (owner) — refuse as `person` (the stricter of rule and policy wins); report-only lets the conflict run on every move. Refusing amends ADR 0001 D02 (a rule's mode decides a move), with an amendment note there |
+| O3 | A project's policy: adds to the defaults' or replaces them | decided (owner) — adds (union); an exception would need an explicit key later |
 | O4 | Identities (intake, implement, review, merge, accept, release) | open, future: sketch above; not decided now |
-| O5 | The issue trackers (`github-issues`, `gitlab-issues`) | follow ADR 0001 D07 / T4: the same part when they take the rules |
+| O5 | The issue trackers (`github-issues`, `gitlab-issues`) | decided (owner, D-POLICY-HOSTS): they enforce the policy (ADR 0004 D06) — refusal as in the move, `projects.<KEY>` matched against the issue's repository path; the transition rules for them stay with ADR 0001 D07 / T4 |
 
 ## Rejected (candidates)
 
@@ -153,7 +153,8 @@ whether identities belong in `oikos.yaml` or in the tracker's own permissions (O
 - `transitions.mjs`: `policy` in `DEFAULTS_KEYS` and `PROJECT_KEYS`; validation; `effectivePolicy`
   (union); `policyConflicts`; `resolveTransition` callers apply the policy after the rule.
 - `project-setup.mjs`: `policyLines`; `project-init` options `--person-only`, `--policy-source`.
-- `tools/jira/cli.mjs`: the refusal and the batch listing; the issue trackers later (O5).
+- `tools/jira/cli.mjs`: the refusal and the batch listing; `tools/github-issues`, `tools/gitlab-issues`:
+  the same refusal through `statusPolicyRefusal` (O5, ADR 0004 D06).
 - `sync --check`: conflicts as warnings.
 - Docs: `connectors/jira/transitions.md` (the part and the example), `examples/installation/oikos.yaml`,
   `scenarios/policy-check.md`, `scenarios/project-setup.md`, the skill's § Moving a task.

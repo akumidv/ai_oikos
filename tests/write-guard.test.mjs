@@ -457,6 +457,89 @@ test('classify: a direct HTTP write is denied by its host; the hosts are a param
   assert.equal(urlHost('https://me:$T@Example.Atlassian.net:443/rest'), 'example.atlassian.net');
 });
 
+test('classify: a host with the root\'s trailing dot or in capitals is the same host', () => {
+  assert.equal(urlHost('https://API.GITHUB.COM./x'), 'api.github.com');
+  assert.equal(urlHost('https://api.github.com.:443/x'), 'api.github.com');
+  for (const command of ['curl -XPOST https://api.github.com./x', 'curl -XPOST https://API.GITHUB.COM./x']) {
+    assert.equal(classify(command, CORE).http, 'curl to api.github.com', command);
+  }
+});
+
+test('classify: code given words of its own (`bash -c \'"$@"\' _ …`) is code the guard cannot read', () => {
+  const passed = [
+    `bash -c 'node "$@"' _ oikos/tools/jira/cli.mjs comment --task P --text x`,
+    `bash -c '"$@"' _ node oikos/tools/jira/cli.mjs comment P`,
+    `bash -c 'exec "$@"' _ node oikos/tools/jira/cli.mjs comment P`,
+    `sh -c 'node "\${@}"' _ oikos/tools/jira/cli.mjs comment P`,
+    `bash -c 'node $0' 'oikos/tools/jira/cli.mjs comment P'`,
+    `timeout 9 bash -c '"$@"' _ node oikos/tools/jira/cli.mjs comment P`,
+    `bash -c 'node "$1" info' _ oikos/tools/jira/cli.mjs`,
+  ];
+  for (const command of passed) {
+    const result = classify(command, INST);
+    assert.equal(result.verdict, 'denied', command);
+    assert.match(result.nested?.inner ?? '', /code the guard cannot read/, command);
+  }
+  // Given words that hold no write command and no cli.mjs are only data; a literal string is still read.
+  assert.equal(classify(`bash -c 'echo "$@"' _ a b`, INST).verdict, 'free');
+  assert.equal(classify(`bash -c 'node oikos/tools/jira/cli.mjs info P' _ x`, INST).verdict, 'free');
+  // A positional parameter may be any script with any words: never a loose read's script.
+  for (const command of ['node "$@"', 'node "$1" info P', 'node "${1}" info P', 'node $* info P']) {
+    assert.deepEqual(classify(command, INST), { verdict: 'denied', tools: ['?'] }, command);
+  }
+});
+
+test('classify: a redirection into exactly /dev/null is no file redirection', () => {
+  const grep = 'grep -n transition tools/github-issues/cli.mjs';
+  for (const redirect of ['2>&1', '2>/dev/null', '>/dev/null', '&>/dev/null', '>> /dev/null', '2> /dev/null | head']) {
+    assert.equal(verdict(`${grep} ${redirect}`), 'free', redirect);
+  }
+  for (const redirect of ['2>/dev/nullx', '>/dev/null.txt', '> "/dev/null"', '2>/tmp/out']) {
+    assert.equal(verdict(`${grep} ${redirect}`), 'denied', redirect);
+  }
+});
+
+test('classify: a tool mentioned inside a word of code passes only as a read', () => {
+  const coded = [
+    `node -e "require('child_process').execSync('node oikos/tools/jira/cli.mjs com'+'ment P')"`,
+    `node -e "process.argv.push('com'+'ment');import('./oikos/tools/jira/cli.mjs')"`,
+  ];
+  for (const command of coded) assert.equal(classify(command, INST).verdict, 'denied', command);
+  for (const command of ["grep -rn 'node tools/jira/cli.mjs' docs", 'git commit -m "Fix tools/jira/cli.mjs parsing"', "grep -rn 'tools/jira/cli.mjs info' docs | head"]) {
+    assert.equal(verdict(command), 'free', command);
+  }
+});
+
+test('classify: curl and wget config files are found where the command\'s own environment says', () => {
+  const dir = tempDir('oikos-rc-');
+  const empty = tempDir('oikos-rc-empty-');
+  mkdirSync(join(dir, 'xdg'));
+  writeFileSync(join(dir, '.curlrc'), 'request=POST\n');
+  writeFileSync(join(dir, 'xdg', 'curlrc'), 'request=POST\n');
+  writeFileSync(join(dir, '.wgetrc'), '# a comment\npost_data = x\n');
+  writeFileSync(join(dir, 'get.wgetrc'), 'method = GET\n');
+  const at = (command) => classify(command, INST, undefined, undefined, { envs: [{ HOME: empty }] });
+  const url = 'https://api.github.com/repos/o/r/issues';
+  const writes = [
+    `CURL_HOME=${dir} curl ${url}`, `HOME=${dir} curl ${url}`, `env CURL_HOME=${dir} curl ${url}`, `XDG_CONFIG_HOME=${dir}/xdg curl ${url}`,
+    `export HOME=${dir}; curl ${url}`, `HOME=${dir}; curl -s ${url}`, `HOME=${dir} timeout 5 curl ${url}`,
+    // A value the guard cannot tell is a config it cannot read.
+    `CURL_HOME=$X curl ${url}`, `HOME=\`pwd\` curl ${url}`, `HOME=~x curl ${url}`,
+    `wget --config=${dir}/.wgetrc ${url}`, `wget --config ${dir}/.wgetrc ${url}`, `wget --conf=${dir}/.wgetrc ${url}`,
+    `WGETRC=${dir}/.wgetrc wget ${url}`, `HOME=${dir} wget ${url}`, `wget --config=${dir}/missing ${url}`, `WGETRC=$W wget ${url}`,
+  ];
+  for (const command of writes) assert.match(at(command).http ?? '', /^(?:curl|wget) to api\.github\.com$/, command);
+  // Inside another shell, the outer assignment still holds.
+  assert.match(at(`HOME=${dir} bash -c 'curl ${url}'`).nested?.inner ?? '', /direct write to a connected service \(curl to api\.github\.com\)/);
+  const reads = [
+    `CURL_HOME=${empty} curl ${url}`, `HOME=${dir} curl -q ${url}`, `echo HOME=${dir}; curl ${url}`, `curl ${url}`,
+    `HOME=${dir} wget --no-config ${url}`, `wget --config=${dir}/get.wgetrc ${url}`, `wget --config=${dir}/.wgetrc https://example.com/x`,
+  ];
+  for (const command of reads) assert.equal(at(command).verdict, 'free', command);
+  // The hook looks the files up from its own environment too.
+  assert.match(reason(session('Bash', INST, { HOME: empty }).shell(`HOME=${dir} curl -s ${url}`)), /direct write to a connected service/);
+});
+
 test('the lexer keeps a backslash in double quotes unless bash drops it', () => {
   const [{ tokens }] = shellSegments('x "\\--help" "\\$a" "a\\\nb" c\\\nd');
   assert.deepEqual(tokens, ['x', '\\--help', '$a', 'ab', 'cd']);

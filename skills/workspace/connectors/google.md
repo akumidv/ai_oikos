@@ -59,3 +59,9 @@ personal account, a colleague's), say so before answering.
 A document made from this material follows OIKOS.md: facts checked in the installation's
 knowledge base, drafts and the final note where the installation's `AGENTS.md` says; an office
 file via the `documents` skill.
+
+## People key
+
+Google identifies a person by the work email, which the people file already holds as `email`; there
+is no `accounts:` key for it. A recipient or an event guest comes from `people find`, never from a
+guessed address.

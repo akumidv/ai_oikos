@@ -17,6 +17,8 @@
 //   `printenv`, `set`, `export -p`, `declare -p`) or echoing a secret-looking variable
 //   (`$…TOKEN`, `$…SECRET`, `$…PASSWORD`, `$…API_KEY`) is denied too.
 // Best effort against accidents, not a sandbox: `bash -c "…"` or a script file is not looked into.
+// A heredoc body is read as commands, so `cat <<'EOF'` that writes a file whose text names
+// `.local/.env` is denied: write the file with the file tool instead.
 import { resolve } from 'node:path';
 import { shellSegments, decide } from './common.mjs';
 import { isFileTool, fileTargets, globPatterns, globNamesSecret, shellCommand, isRead, isEnvFile, isLocalFolder, isLocalStore } from './host.mjs';

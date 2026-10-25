@@ -25,3 +25,5 @@ _aitna/.venv/
 .claude/model-routing.log
 .claude/second-opinion/
 .claude/agents/k_*.md
+
+# Node dependencies

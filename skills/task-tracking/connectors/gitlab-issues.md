@@ -55,6 +55,18 @@ a person moves a task. **There is no default**: without `GITLAB_AGENT_STATUSES`,
 refused (exit 3) and names the key. The status a line shows is the first such label, `open` when
 there is none, `closed` for a closed issue.
 
+**The organization's policy.** This tool reads `task-tracking.gitlab-issues` of `oikos.yaml` for the
+policy only ([ADR 0004](../../../docs/adr/0004-tracker-policy.md), D-POLICY-HOSTS; the transition
+rules of that part are not read by this tool). `policy.person_only` — in `defaults`, and in
+`projects.<group/project>` (the issue's GitLab project path), which adds to the defaults' — names the
+status labels only a person moves a task into or out of. A move into or out of one is refused (exit 3,
+before any request, dry run and real run alike) with `refused: policy:`, naming the status, the policy
+path and its `source`, and `GITLAB_AGENT_STATUSES` when it lists the status as open to an agent (the
+policy overrides it); the issue's link is printed for the user. The same holds for `create --labels`
+and `edit --labels | --add-labels | --remove-labels` that would add or remove such a label (a label
+named like a person-only status is the issue's status). A malformed part is a usage error (exit 1)
+naming the path. No `policy`: behaviour as above. There is no `project-init` for this tool.
+
 ## Boards and sprints
 
 A "sprint" is a milestone (default) or an iteration (Premium), by `GITLAB_SPRINTS` =
@@ -114,8 +126,12 @@ node oikos/tools/gitlab-issues/cli.mjs link --from '#15' --type blocks --to acme
 - `link --type relates_to | blocks | is_blocked_by`. Blocking links depend on the GitLab tier
   (unverified until checked live): a 403 or 400 from GitLab is reported as "this GitLab tier may
   not offer blocking links"; link as `relates_to` then, or a person links them.
-- Titles, descriptions and comments are English; the tool refuses non-Latin text unless
-  `--allow-non-english` is passed. Comments are concise (2–5 lines), markdown (native in GitLab).
+- Titles, descriptions, comments and label text (`--labels`, `--add-labels`; a label name that
+  is flagged, such as an assistant's name, is refused too) go through the one content check
+  (OIKOS.md, *What goes out*): the dry run lists each flagged line and exits 3, the real run refuses
+  (`refused: content check:`) unless `--allow-flagged` (or `--allow-non-english`) is in the
+  command, dry run and write alike; a secret is never overridable. Comments are concise
+  (2–5 lines), markdown (native in GitLab).
 - Not undoable: the notifications a write sends, a created issue (deleting needs the Owner role
   and is not offered).
 - Without credentials every command stops with exit 1 and names the missing keys, before any
@@ -148,3 +164,11 @@ is not offered and where a person does it.
 Token page: `<GITLAB_URL>/-/user_settings/personal_access_tokens`. `whoami` reads the scopes
 from `GET /personal_access_tokens/self` (unverified until checked live; "scopes not reported" when
 GitLab does not answer it). Never ask for a token in the chat.
+
+## People key
+
+In the people file (`.local/private.yaml`, `accounts:`) a person's GitLab account is under the key
+**`gitlab`**; its value is the username (`ada`), as the commands take it (`--assignee`). The same
+key serves every GitLab connector (issues, code hosting, wiki). Not in the file: the username is
+what a tool result shows or the user says — never guessed from a name; then offer `people add`
+([notes](../../notes/SKILL.md) § Resolving a person).

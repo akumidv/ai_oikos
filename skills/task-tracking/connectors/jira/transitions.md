@@ -184,7 +184,8 @@ the example's rules are written so:
   its own dry run and confirmation. Without a `task-tracking.jira` part no path is looked for.
 - `info --extended` adds the same `## Pull requests` section to `info`; `info` without it reads
   no code host.
-- `--comment` is posted after the move, as `comment` posts it (markdown, English).
+- `--comment` is posted after the move, as `comment` posts it (markdown), and is content-checked
+  in the dry run too (`--allow-flagged` goes into both runs, as for `comment`).
 - Without credentials every command stops with exit 1 and names the missing keys, before any
   request; it never falls back to a dry run. Only `comment --dry-run` and `link --dry-run`, whose
   preview reads nothing from Jira, still show it — the write itself needs the credentials.

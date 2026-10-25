@@ -9,7 +9,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { UsageError } from './cli.mjs';
 import { installRoot } from './paths.mjs';
-import { isEnvFile, isLocalStore } from '../hooks/host.mjs';
+import { isEnvFile, isLocalStore, isStoreName } from '../hooks/host.mjs';
 
 /** The installation's private folder, whose first names decide what is closed (ADR 0002 D01). */
 export const PRIVATE_FOLDER = '.local';
@@ -21,7 +21,7 @@ export const HOME_OR_NETWORK = /^(?:~|\\\\|\/\/)/;
 export const inside = (path, root) => path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 // A file system that does not tell `.Local` from `.local` (Windows, macOS by default) is judged by
 // folded names, as tools/hooks/host.mjs judges `.local/` store names.
-const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
+export const FOLDS_CASE = process.platform === 'win32' || process.platform === 'darwin';
 const folded = (path) => (FOLDS_CASE ? path.toLowerCase() : path);
 /** {@link inside}, by folded names where the file system folds case. */
 export const insideFolded = (path, root) => inside(folded(path), folded(root));
@@ -60,6 +60,16 @@ export function closedStore(path, roots) {
 }
 
 /**
+ * The closed store, as `.local/<name>`, that the absolute `path` lies in under ANY `.local/` folder —
+ * this installation's or another's, where a temporary folder or a symlink leads — or null. The names
+ * are judged as closedStore judges them (isStoreName).
+ */
+export function anyClosedStore(path) {
+  const found = [...path.matchAll(new RegExp(String.raw`(?:^|[/\\])\.local[/\\]+([^/\\]+)`, FOLDS_CASE ? 'gi' : 'g'))].find((m) => isStoreName(m[1]));
+  return found ? `${PRIVATE_FOLDER}/${found[1]}` : null;
+}
+
+/**
  * The first dot-named component (`.claude`, `.mcp.json`, `.git`) of the real `path` below each
  * allowed root it lies in, or null. Outside the working folders of `.local/` a dot name is the
  * installation's configuration or tooling (its settings, MCP servers, git) and never sent out;
@@ -77,14 +87,16 @@ export function dotComponent(path, roots) {
 
 /**
  * Why `path` may not be carried by its names, or null: it lies in a closed store of `.local/`
- * (closedStore), is a `.env` file, or has a dot-named component outside a working folder of
- * `.local/` (dotComponent). Judges the path as given, so it serves a real path and the path a
+ * (closedStore) or in a closed store of any other `.local/` folder (anyClosedStore), is a `.env`
+ * file, or has a dot-named component outside a working folder of `.local/` (dotComponent). Judges the path as given, so it serves a real path and the path a
  * symlink is reached by alike.
  */
 export function nameProblem(path, roots) {
   const store = closedStore(path, roots);
   if (store) return `it is in ${store}, a closed store of the installation's private ${PRIVATE_FOLDER}/ folder (a dot name there is never read)`;
   if (isEnvFile(path)) return `${basename(path)} is a .env file, never read`;
+  const other = anyClosedStore(path);
+  if (other) return `it is in ${other}, a closed store of a ${PRIVATE_FOLDER}/ folder (a dot name there is never read)`;
   const dotted = dotComponent(path, roots);
   if (dotted) return `it is under ${dotted}, a dot-named file or folder (configuration or tooling such as .claude/, .mcp.json, .git/ — never sent out); outside a working folder of ${PRIVATE_FOLDER}/ a dot name is never read`;
   return null;
@@ -94,6 +106,26 @@ export function nameProblem(path, roots) {
 export function pathProblem(path, roots) {
   if (!roots.allowed.some((root) => inside(path, root))) return `it resolves outside ${roots.where}`;
   return nameProblem(path, roots);
+}
+
+/**
+ * Why the real `path` (its `stat`) may not be carried out of a scratch folder, or null. A caller
+ * that allows scratch folders (a session scratchpad, a folder the user names) names them as
+ * `roots.scratch` — one real path or a list — and the current user's id as `roots.uid` (undefined
+ * where the platform has none, Windows). Its two rules: a scratch folder itself is not a source,
+ * only paths inside it, and a file inside it is carried only when `roots.uid` owns it. A path inside
+ * the installation is not judged, even where the installation lies under a scratch folder; no
+ * `roots.scratch`, no rule.
+ */
+export function scratchProblem(path, stat, roots) {
+  const { scratch, uid, install } = roots;
+  const folders = [scratch].flat().filter(Boolean);
+  if (!folders.some((folder) => inside(path, folder)) || (install && inside(path, install))) return null;
+  if (folders.includes(path)) return 'it is a scratch folder itself — name a file or folder inside it';
+  if (uid !== undefined && stat.isFile() && stat.uid !== uid) {
+    return `it is owned by user ${stat.uid}, not by you (user ${uid}) — a file in a scratch folder is carried only when it is yours`;
+  }
+  return null;
 }
 
 /**

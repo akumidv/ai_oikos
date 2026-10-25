@@ -2,8 +2,8 @@
 
 The user asks to move a task to a later status — review, done, closed — and the installation's
 rule for that move is `confirm` (the skill, § Moving a task). The move happens only after the
-task shows its result and the user confirms; checking the result itself is not this scenario's
-(a person, or a review).
+task shows its result and the user confirms. Judging the result against "Done when" is
+[review-result.md](review-result.md); its verdict is the evidence the question below rests on.
 
 The connector's commands and its dry run: Jira — [connectors/jira/transitions.md](../connectors/jira/transitions.md).
 The issue trackers keep the plain list of agent statuses for now: a move beyond it is a person's.

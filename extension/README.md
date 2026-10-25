@@ -17,6 +17,11 @@ issue, so a panel you close stays closed.
 
 The helpers and the titles they look for are one table in [common/helpers.js](common/helpers.js).
 
+Blocks are found by their visible titles, not by Jira's test ids or classes. The extension was built
+without a live Jira page and is tested on a modelled DOM in jsdom, so a title or layout that differs
+on the real page leaves a block shown: the popup's **Copy diagnostics** gives the real paths to
+compare before the logic is changed.
+
 ## Install
 
 The extension is loaded unpacked from the oikos folder, so a `git pull` updates it:

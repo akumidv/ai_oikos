@@ -75,15 +75,15 @@ export function graphqlError(errors, { status = 200, url, headers = null } = {})
  * `help` goes to `githubToken`.
  *
  * `api(path, opts)` answers { status, headers, data }. A 404 is a usage error "not found, or no
- * access" — unless `opts.absentOn404`, for a path whose absence is an answer (a file probed, a
- * branch without protection): then it returns null. A 403 stays an HttpError with GitHub's body, so
- * the caller can report what the token lacks.
+ * access" — unless `opts.rawOn404`, which keeps it an HttpError with GitHub's body, for a caller
+ * that tells the 404s apart by message (the governance reads). A 403 stays an HttpError with
+ * GitHub's body, so the caller can report what the token lacks.
  */
 export function githubClient(tool, { help } = {}) {
   const t = githubToken(help ? { help } : {});
   const { apiUrl, serverUrl, graphqlUrl } = githubEndpoints(envValue('GITHUB_API_URL'), envValue('GITHUB_SERVER_URL'));
   const api = async (path, opts = {}) => {
-    const { headers = {}, absentOn404 = false, ...rest } = opts;
+    const { headers = {}, rawOn404 = false, ...rest } = opts;
     try {
       return await request(path.startsWith('http') ? path : `${apiUrl}${path}`, {
         tool,
@@ -93,7 +93,7 @@ export function githubClient(tool, { help } = {}) {
     } catch (e) {
       if (e instanceof HttpError && e.status === 401) throw new UsageError(`GitHub rejected the credential (401, route: ${t.route})`);
       if (e instanceof HttpError && e.status === 404) {
-        if (absentOn404) return null;
+        if (rawOn404) throw e;
         throw new UsageError(`not found, or no access (GitHub answers 404 for both): ${path}`);
       }
       throw e;

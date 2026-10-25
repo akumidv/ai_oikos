@@ -2,7 +2,9 @@
 
 Accepted commitments only. Design, alternatives and open points:
 [docs/design/tracker-policy.md](../design/tracker-policy.md). Implementation state:
-[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (F17). Accepted by the owner, 2026-10-22, with the
+[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (F17); in code in `jira` (D01–D05) and, by the owner's
+decision D-POLICY-HOSTS, in `github-issues` and `gitlab-issues` (D06; no `project-init` there).
+Accepted by the owner, with the
 design's open points O1–O3 decided as D01 and D03 record; identities (O4) stay out of scope.
 Extends [ADR 0001](0001-tracker-transitions.md) D01 (D01, D02 below).
 
@@ -36,7 +38,7 @@ a person-only status is refused as `person`.
 
 - **Choice.** A move into or out of a person-only status is refused as `person` (exit 3, the
   task's link), naming the policy, its source and the conflicting rule, whatever the rule's mode.
-  A `confirm` move does **not** satisfy `person_only` (owner, 2026-10-22): the agent starts it, so
+  A `confirm` move does **not** satisfy `person_only` (owner): the agent starts it, so
   it is not the person's own move in the tracker. The stderr line starts `refused: policy:`, so it reads apart from a rule's
   own `person` refusal (`refused:`) and from the content check's (`refused: content check:`,
   ADR 0003 D03); the exit code stays 3 because the next step is the same as for `person`: the user
@@ -66,3 +68,23 @@ a person-only status is refused as `person`.
   `policy` shows the person-only form and what it turns to `person`, including the `"*" → Closed`
   rule that also covers Review.
 - **Rationale.** The example is copied; it must not teach the conflict this ADR reports.
+
+## D06 — `github-issues` and `gitlab-issues` enforce the policy too
+<a id="dec-0004-d06"></a>`Decision-ID: DEC-0004/D06`
+
+- **Owner's decision D-POLICY-HOSTS.** The organization's policy — `task-tracking.<connector>.defaults.policy` and
+  `projects.<KEY>.policy` — is enforced by `github-issues` and `gitlab-issues` as by `jira`: a status
+  move into or out of a person-only status is refused (exit 3, `refused: policy:`, before anything
+  is sent, dry run and real run), naming the status, the policy path, its `source` and — when the
+  tool's own agent list (`GITHUB_AGENT_STATUSES`, `GITLAB_AGENT_STATUSES`) lists the status — that
+  list as the rule overridden. `confirm` does not satisfy `person_only` there either (these tools
+  have no `confirm` mode). The two tools keep their own agent and review lists; they read the
+  policy only, not the transition rules (ADR 0001 D07 / T4 stay open). Where status is a label
+  (GitLab; GitHub without `GITHUB_PROJECT`), adding or removing a person-only label through `create`
+  or `edit` is refused the same way.
+- **Project key (implementation reading, for the owner to confirm).** These trackers have no project
+  key like Jira's; `projects.<KEY>` is matched against the issue's repository path
+  (`owner/repo`, `group/project`), case-insensitively; no matching project means `defaults.policy`
+  alone.
+- **Not here.** These tools have no `project-init`, so D02's `## Policy` report applies to them
+  only through `sync --check`, which already lists conflicts for every connector's part.

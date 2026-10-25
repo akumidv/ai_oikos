@@ -13,19 +13,31 @@
 // cannot show: arguments read from files (`xargs -a`, a script written earlier and run now), globs
 // that expand to file names prepared earlier (`node *`), variables set outside the command (the
 // environment), and `node -e` code that imports tools/common.
+// The text of a heredoc or a script is judged as commands, since the guard cannot tell a file's
+// contents from a command: write such a file with the file tool, then run it. The special
+// parameters `$?`, `$#`, `$$`, `$!`, `$-` expand to digits or option letters, never to a path;
+// the positional parameters (`$@`, `$*`, `$0`–`$9`) may be anything. A redirection into exactly
+// /dev/null is no redirection into a file.
 // - a direct HTTP write to a connected service — `curl`/`wget` with a writing method or a body
 //   to a host of CONNECTED_HOSTS or of the installation's site settings (or one the shell
-//   expands), `gh api` with a writing method or fields (a GraphQL call: a mutation, or a query
-//   the guard cannot read) — is denied: the oikos tool does it, with its dry run. curl's config
-//   files count as its command line: `-K`/`--config <file>` and the user's `$CURL_HOME/.curlrc`
-//   and `~/.curlrc` (unless `-q`/`--disable` is the first option), each read when it is a regular
-//   file of at most 64 KB; one that cannot be read (`-K -`, a path the shell expands, a missing,
-//   special or larger file) counts as a write, to the hosts the command line names;
+//   expands; the host read in lower case, without the root's trailing dot), `gh api` with a
+//   writing method or fields (a GraphQL call: a mutation, or a query the guard cannot read) — is
+//   denied: the oikos tool does it, with its dry run. `gh`'s other commands are not looked at. curl's
+//   and wget's config files count as their command line: `-K`/`--config <file>` and the user's
+//   `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc` and `~/.curlrc` (unless `-q`/`--disable` is
+//   the first option); wget's `--config <file>`, `$WGETRC` and `~/.wgetrc` (unless `--no-config`),
+//   where a body or a writing method is a write. Each is read when it is a regular file of at most
+//   64 KB, in the hook's environment and in the one the command gives the program (its
+//   `VAR=`/`env VAR=` words, bare assignments and `export`s before it); one that cannot be read
+//   (`-K -`, a path or an assigned folder the shell expands, a missing given file, a special or
+//   larger file) counts as a write, to the hosts the command line names;
 // - code handed to another shell — the string of `bash|sh|zsh|dash [options] -c <string>`, also
 //   behind a wrapper (`timeout`, `env`), and the words of `eval` — is classified the same way, up
 //   to three levels deep. A literal read is a read; an oikos write or a direct HTTP write in it is
 //   denied, to be run as a standalone command; a string the outer shell expands is denied when it
-//   holds a write command word or an HTTP write option;
+//   holds a write command word or an HTTP write option; a string with a `$` that is given
+//   words after it (`bash -c '"$@"' _ node …`) is not read either, and is denied when the whole
+//   command holds a write command word or a cli.mjs;
 // - a command that does not mention a write tool passes. A tool is mentioned only through its
 //   script: `<tool>/cli.mjs` in the text (backslashes and quotes removed), a word that really
 //   leads to its cli.mjs (symlinks, `..`, literal `cd`s), a cli.mjs the guard cannot pin (a
@@ -33,7 +45,8 @@
 //   of a package runner (`npm run jira`), or a word the shell may expand into a cli.mjs where it
 //   may run — anywhere but in a segment that only reads, and anywhere at all once the command
 //   substitutes or pipes or redirects into a file next to a segment that does not only read;
-// - a mention with no write command word in the text and nothing the shell expands passes too;
+// - a mention with no write command word in the text and nothing the shell expands passes too,
+//   unless a cli.mjs is mentioned inside a word of code, which may build its command at run time;
 // - otherwise it passes only in the strict form — one plain command `[VAR=…] node <path to
 //   tools/<tool>/cli.mjs> <command> …`: nothing chained, piped, redirected, substituted,
 //   expanded or commented — or as a read: every part a reader (cat, grep, rg, cut, sort, find
@@ -114,8 +127,8 @@ const WGET_LONG = new Set([
 ]);
 /** wget's options that send a body or set the method; getopt takes any unambiguous prefix of them. */
 const WGET_WRITES = ['--method', '--post-data', '--post-file', '--body-data', '--body-file'];
-/** A wgetrc command (`-e`) that sends a body or sets the method. */
-const WGET_RC_WRITE = /^\s*(?:post_?data|post_?file|body_?data|body_?file|method)\s*=/i;
+/** A wgetrc command (`-e`, a wgetrc line) that sends a body or sets the method; wget ignores `_` and `-` in its name. */
+const WGET_RC_WRITE = /^\s*(?:post[-_]?data|post[-_]?file|body[-_]?data|body[-_]?file|method)\s*=/i;
 /** `gh api`'s options that take a value. */
 const GH_SHORT = 'XfFHqtp';
 const GH_LONG = new Set(['--method', '--raw-field', '--field', '--header', '--input', '--jq', '--template', '--cache', '--preview', '--hostname']);
@@ -132,11 +145,18 @@ const SHELL_WRAPPERS = new Set(['timeout', 'nice', 'ionice', 'stdbuf', 'setsid']
 const MAX_DEPTH = 3;
 /** Shell special parameters that expand to digits or option letters, never to a path. */
 const SPECIAL_PARAMETERS = '?#$!-';
+/** A positional parameter in a word (`$@`, `$*`, `${@}`, `$0`–`$9`, `${1}`): the words a script or `-c` string is given. */
+const POSITIONAL = /\$(?:[@*\d]|\{[@*\d]\})/;
 /** curl, wget or `gh api` in code the guard cannot read, and an option of theirs that may write. */
 const HTTP_PROGRAM = /(?:^|[^\w-])(?:curl|wget|gh\s+api)(?![\w-])/;
 const HTTP_WRITE_OPTION = /(?:^|\s)(?:-[A-Za-z]*[XdFTKfe]|--(?:request|method|data|form|upload-file|json|post|body|field|raw-field|input|config|execute))/;
 
 const unique = (list) => [...new Set(list)];
+
+/** The variables that say where curl and wget find their default config files. */
+const CONFIG_HOMES = Object.freeze({ curl: ['CURL_HOME', 'XDG_CONFIG_HOME', 'HOME'], wget: ['WGETRC', 'HOME'] });
+const CONFIG_VARIABLES = unique(Object.values(CONFIG_HOMES).flat());
+const NO_DEFAULTS = Object.freeze({ files: [], unread: false });
 
 /**
  * Whether a word may be other than it reads: it holds an expansion character and the command
@@ -150,10 +170,13 @@ const mayExpand = (word, syntax) => (/[$`]/.test(word) && syntax.has('substituti
 /** Every tool's write command words (writes.mjs). */
 const allVerbs = (writes) => unique(Object.values(writes).flat());
 
+/** The index of a segment's command word in its tokens. */
+const executedFrom = (segment) => segment.tokens.length - segment.args.length - 1;
+
 /** The words a segment runs with: its command word and every word after it (none without a command). */
 function executedWords(segment) {
   if (segment.exe === null) return [];
-  return segment.tokens.slice(segment.tokens.length - segment.args.length - 1);
+  return segment.tokens.slice(executedFrom(segment));
 }
 
 const real = (path) => {
@@ -241,7 +264,9 @@ function couldBeCli(base) {
       i++;
       pattern += '\\w*';
     } else if (ch === '$') {
+      // `${…}`, `$NAME`, and the positional parameters `$@`, `$*`, `$0`–`$9`: anything.
       if (base[i + 1] === '{') i = Math.max(base.indexOf('}', i), i);
+      else if (/^[@*]/.test(base.slice(i + 1))) i++;
       else while (/\w/.test(base[i + 1] ?? '')) i++;
       pattern += '.*';
     } else if (end > i && (ch !== '{' || /,|\.\./.test(base.slice(i, end)))) {
@@ -284,10 +309,11 @@ function wordTool(word, where, executes) {
 }
 
 /**
- * The write tools a command mentions; `'?'` stands for one that cannot be told.
+ * The write tools a command mentions; `'?'` stands for one that cannot be told. `coded`: a cli.mjs
+ * is mentioned inside a word of code (not a path), where code may build the command at run time.
  * @param {string} command a shell command
  * @param {{segments: object[], cwd: string, clis: Map<string, string>, writes: object}} parsed
- * @returns {Set<string>}
+ * @returns {{tools: Set<string>, coded: boolean}}
  */
 function mentionedTools(command, parsed) {
   const text = plainText(command);
@@ -314,8 +340,11 @@ function mentionedTools(command, parsed) {
       if (tool) found.add(tool);
     }
   }
-  return found;
+  return { tools: found, coded: parsed.segments.some((segment) => segment.tokens.some(codeMention)) };
 }
+
+/** Whether a word is code, not a path, that mentions a cli.mjs (backslashes and quotes removed). */
+const codeMention = (word) => !CLEAN_PATH.test(word) && !EXPANDING_PATH.test(word) && plainText(word).includes('cli.mjs');
 
 /** Whether the text holds one of `verbs` as a whole word (not part of `--flag` or `a-b`). */
 function hasVerbWord(text, verbs) {
@@ -378,11 +407,14 @@ function skipTarget(command, from) {
   return /[$`]/.test(command.slice(start, i)) ? start : i;
 }
 
-/** The shell syntax one unquoted character brings in (`next` is the text after it). */
+/** What follows a `>` that redirects into no file: a descriptor (`>&2`) or exactly /dev/null (also after `>>`). */
+const NO_FILE = /^(?:&[\d-]|>?[ \t]{0,4}\/dev\/null(?![^\s;&|()<>]))/;
+
+/** The shell syntax one unquoted character brings in (`next`: up to 16 characters after it). */
 function syntaxOf(ch, next, wordStart) {
   if (ch === '`' || (ch === '$' && next[0] === '(') || ((ch === '<' || ch === '>') && next[0] === '(')) return ['substitution', 'command substitution'];
   if (ch === '$') return ['substitution'];
-  if (ch === '>') return /^&[\d-]/.test(next) ? ['redirection'] : ['redirection', 'file redirection'];
+  if (ch === '>') return NO_FILE.test(next) ? ['redirection'] : ['redirection', 'file redirection'];
   if (ch === '<') return ['redirection'];
   if (';&|()\n'.includes(ch)) return ['chaining'];
   if (ch === '#' && wordStart) return ['comment'];
@@ -392,7 +424,7 @@ function syntaxOf(ch, next, wordStart) {
 
 /**
  * The shell syntax that makes `command` more than one plain command: `chaining` (`; & | ( )`, a
- * newline), `redirection` (`file redirection` when into a file), `substitution` (`command
+ * newline), `redirection` (`file redirection` when into a file, /dev/null aside), `substitution` (`command
  * substitution` for `$(`, backticks, `<(`), `expansion` (globs, braces, `~`), `comment`,
  * `unclosed quote`, `control character`. Single-quoted text and escaped characters are plain.
  * @param {string} command a shell command
@@ -414,7 +446,7 @@ export function shellSyntax(command) {
     } else if (ch === "'" || ch === '"') quote = ch;
     else {
       const wordStart = i === 0 || /[\s;&|()<>]/.test(command[i - 1]);
-      for (const f of syntaxOf(ch, command.slice(i + 1, i + 3), wordStart)) found.add(f);
+      for (const f of syntaxOf(ch, command.slice(i + 1, i + 17), wordStart)) found.add(f);
     }
   }
   if (quote) found.add('unclosed quote');
@@ -466,7 +498,8 @@ export const isDryRun = (call) => options(call).includes('--dry-run');
  * first word after the script (tools/common/cli.mjs), so that word alone decides — unless the
  * shell may split a word into more: the command word must be literal (`$CMD` may be any program
  * with any words), and no word may expand once the command holds a write command word anywhere
- * (`V='cli.mjs comment P'; node $V` runs `comment`).
+ * (`V='cli.mjs comment P'; node $V` runs `comment`). A positional parameter is never the script:
+ * it brings the words after it along (`node "$@"`).
  * @param {{tokens: string[]}} segment
  * @param {Record<string, string[]>} writes tool -> its changing commands
  * @param {{syntax: Set<string>, verbWord: boolean}} text the command's shell syntax and whether it holds a write command word
@@ -480,7 +513,7 @@ function looseReadCall({ tokens }, writes, { syntax, verbWord }) {
   if (verbWord && tokens.slice(i).some((word) => mayExpand(word, syntax))) return false;
   if (CLEAN_PATH.test(tokens[i] ?? '') && posix.basename(tokens[i]) === 'node') i++;
   const script = tokens[i];
-  if (!script || script.startsWith('-') || !EXPANDING_PATH.test(script) || !scriptLike(script)) return false;
+  if (!script || script.startsWith('-') || POSITIONAL.test(script) || !EXPANDING_PATH.test(script) || !scriptLike(script)) return false;
   const verb = tokens[i + 1];
   if (verb === undefined || verb === '--help' || verb === '-h') return true;
   return COMMAND_WORD.test(verb) && !Object.values(writes).some((verbs) => verbs.includes(verb));
@@ -536,17 +569,18 @@ function readOnly(command, parsed) {
 }
 
 /**
- * The options a `bash|sh|zsh|dash` call gets before its command: the `-c` string it runs, or
- * undefined when it runs no `-c` string (a script, standard input). `-o`/`-O` and `--rcfile`,
- * `--init-file` take a value; `-lc`, `-e -c` are read as options.
+ * The options a `bash|sh|zsh|dash` call gets before its command: the index of the `-c` string it
+ * runs, or -1 when it runs no `-c` string (a script, standard input). The words after the string
+ * are its `$0`, `$1`, … `-o`/`-O` and `--rcfile`, `--init-file` take a value; `-lc`, `-e -c` are
+ * read as options.
  * @param {string[]} args the shell's arguments
- * @returns {string|undefined}
+ * @returns {number}
  */
 function shellString(args) {
   let command = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--' || arg === '-') return command ? args[i + 1] : undefined;
+    if (arg === '--' || arg === '-') return command ? i + 1 : -1;
     if (arg.startsWith('--')) {
       if (arg === '--rcfile' || arg === '--init-file') i++;
       continue;
@@ -556,49 +590,60 @@ function shellString(args) {
       if (/[oO]/.test(arg)) i++;
       continue;
     }
-    return command ? arg : undefined;
+    return command ? i : -1;
   }
-  return undefined;
+  return -1;
 }
 
 /**
  * The code a segment hands to another shell: the string of `bash|sh|zsh|dash … -c <string>`
- * anywhere among the words it runs, or the words of `eval`; null when there is none. `direct`: the
- * shell is the command word or runs behind a wrapper that only runs it (SHELL_WRAPPERS, `env` and
- * the prefixes stripPrefix takes off), so the segment does what the code does.
+ * anywhere among the words it runs, or the words of `eval`; null when there is none. `passed`:
+ * the words after the string, which the code gets as `$0`, `$1`, … `direct`: the shell is the
+ * command word or runs behind a wrapper that only runs it (SHELL_WRAPPERS, `env` and the prefixes
+ * stripPrefix takes off), so the segment does what the code does.
  * @param {{exe: string|null, args: string[], tokens: string[]}} segment
- * @returns {{shell: string, words: string[], direct: boolean}|null}
+ * @returns {{shell: string, words: string[], passed: string[], direct: boolean}|null}
  */
 function nestedCode(segment) {
   if (segment.exe === null) return null;
-  if (segment.exe === 'eval') return { shell: 'eval', words: segment.args, direct: true };
+  if (segment.exe === 'eval') return { shell: 'eval', words: segment.args, passed: [], direct: true };
   const { tokens } = segment;
   const from = tokens.length - segment.args.length - 1;
   for (let i = from; i < tokens.length; i++) {
     const name = posix.basename(tokens[i]);
     if (!SHELLS.has(name)) continue;
-    const code = shellString(tokens.slice(i + 1));
-    if (code === undefined) continue;
-    return { shell: `${name} -c`, words: [code], direct: i === from || SHELL_WRAPPERS.has(posix.basename(tokens[from])) };
+    const at = shellString(tokens.slice(i + 1)) + i + 1;
+    if (at === i || at >= tokens.length) continue;
+    const direct = i === from || SHELL_WRAPPERS.has(posix.basename(tokens[from]));
+    return { shell: `${name} -c`, words: [tokens[at]], passed: tokens.slice(at + 1), direct };
   }
   return null;
 }
 
 /**
  * The nested code of a segment, classified: a literal string by classify one level deeper
- * (`inner`); a string the outer shell expands, or one past MAX_DEPTH, is not read (`inner`
- * undefined) and `unsafe` when it holds a write command word or an HTTP write option.
+ * (`inner`); a string the outer shell expands, one past MAX_DEPTH, or one with a `$` that is given
+ * words of its own (`bash -c '"$@"' _ node …` runs them) is not read (`inner` undefined) and
+ * `unsafe` when it holds a write command word or an HTTP write option — for one given words, when
+ * the whole command holds one or mentions a cli.mjs.
  */
 function nestedOf(segment, syntax, context) {
   const nested = nestedCode(segment);
   if (!nested) return null;
   const code = nested.words.join(' ');
-  if (context.depth < MAX_DEPTH && !nested.words.some((word) => mayExpand(word, syntax))) {
-    const inner = classify(code, context.cwd, context.writes, context.hosts, { curlrc: context.curlrc, depth: context.depth + 1 });
+  const passes = nested.passed.length > 0 && code.includes('$');
+  if (context.depth < MAX_DEPTH && !passes && !nested.words.some((word) => mayExpand(word, syntax))) {
+    const envs = programEnvs(programWords(segment, executedFrom(segment), context), context);
+    const inner = classify(code, context.cwd, context.writes, context.hosts, { envs, depth: context.depth + 1 });
     return { ...nested, inner, unsafe: inner.verdict !== 'free' };
   }
-  const unsafe = hasVerbWord(code, allVerbs(context.writes)) || (HTTP_PROGRAM.test(code) && HTTP_WRITE_OPTION.test(code));
-  return { ...nested, unsafe };
+  return { ...nested, unsafe: unreadableWrites(passes ? context.text : code, passes, context.writes) };
+}
+
+/** Whether code the guard cannot read may write: a write command word, curl/wget/`gh api` with a write option, or — for code given words (`passes`) — a cli.mjs. */
+function unreadableWrites(text, passes, writes) {
+  const http = HTTP_PROGRAM.test(text) && HTTP_WRITE_OPTION.test(text);
+  return http || hasVerbWord(text, allVerbs(writes)) || (passes && text.includes('cli.mjs'));
 }
 
 /**
@@ -639,10 +684,10 @@ function readOptions(args, short, takesValue) {
 /** Whether a method sends a change: anything but GET, HEAD, OPTIONS — an unknown one included. */
 const writesBy = (method) => method === undefined || !READ_METHODS.has(method.toUpperCase());
 
-/** The host of a URL word, lower case; null when the shell may expand it. */
+/** The host of a URL word, lower case and without the root's trailing dot; null when the shell may expand it. */
 export function urlHost(url) {
   const [, host] = /^(?:[a-z][\w+.-]*:\/\/)?(?:[^@/?#]*@)?([^/?#]*)/i.exec(url);
-  return /[$`*{[~]/.test(host) ? null : host.replace(/:\d*$/, '').toLowerCase();
+  return /[$`*{[~]/.test(host) ? null : host.replace(/:\d*$/, '').replace(/\.$/, '').toLowerCase();
 }
 
 /** Whether `host` is one of `hosts` (`*.x` is `x` and its subdomains); an expanding host is. */
@@ -710,52 +755,116 @@ function configOptions(text) {
   return [...found, ...positionals.map((value) => ({ name: '--url', value }))];
 }
 
-/**
- * The options curl reads from config files: the user's curlrc files (unless `-q`/`--disable` is
- * the first option) and each `-K`/`--config` file, read from every folder the command may be in.
- * `unread`: one could not be read — standard input, a path the shell expands, a missing, special
- * or larger file, a config naming another; its options are unknown, so it counts as a write.
- * @param {string[]} args curl's arguments
- * @param {{name: string, value: string|undefined}[]} given the options of the command line
- * @param {{curlrc: string[], dirs: string[], unknown: boolean}} context
- * @returns {{options: {name: string, value: string|undefined}[], unread: boolean}}
- */
-function curlConfigs(args, given, context) {
-  const found = [];
-  let unread = false;
-  const add = (text) => {
-    const options = typeof text === 'string' ? configOptions(text) : null;
-    if (options) found.push(...options);
-    else unread = true;
-  };
-  if (args[0] !== '-q' && args[0] !== '--disable') {
-    for (const file of context.curlrc) {
-      const text = smallFile(file);
-      if (text !== undefined) add(text);
-    }
-  }
-  for (const { name, value } of given) {
-    if (name !== '-K' && name !== '--config') continue;
-    let files = [];
-    if (value !== undefined && value !== '-' && !/[$`*?[{~]/.test(value)) {
-      if (posix.isAbsolute(value)) files = [value];
-      else if (!context.unknown) files = unique(context.dirs.map((dir) => resolve(dir, value)));
-    }
-    const texts = files.map(smallFile).filter((text) => typeof text === 'string');
-    if (texts.length) texts.forEach(add);
-    else unread = true;
-  }
-  return { options: found, unread };
+/** Where a config option's value may be: nowhere the guard can read for standard input or a path the shell expands. */
+function givenFiles(value, context) {
+  if (value === undefined || value === '-' || /[$`*?[{~]/.test(value)) return [];
+  if (posix.isAbsolute(value)) return [value];
+  return context.unknown ? [] : unique(context.dirs.map((dir) => resolve(dir, value)));
 }
 
 /**
- * The curlrc files curl reads by default: `$CURL_HOME/.curlrc` and `~/.curlrc`. curl stops at the
- * first it finds; the guard reads both.
- * @param {Record<string, string|undefined>} env the environment
+ * The texts of the config files a program reads: its default files (programDefaults) that exist,
+ * and each file it is given (the values of its config options), read from every folder the command
+ * may be in. `unread`: one could not be read — standard input, a path the shell expands, a missing
+ * given file, a special or larger file, a default folder the guard cannot tell.
+ * @param {{files: string[], unread: boolean}} defaults the program's default files
+ * @param {(string|undefined)[]} given the values of its config options
+ * @param {{dirs: string[], unknown: boolean}} context
+ * @returns {{texts: string[], unread: boolean}}
+ */
+function configTexts(defaults, given, context) {
+  const texts = [];
+  let unread = defaults.unread;
+  for (const file of defaults.files) {
+    const text = smallFile(file);
+    if (text === null) unread = true;
+    else if (text !== undefined) texts.push(text);
+  }
+  for (const value of given) {
+    const found = givenFiles(value, context).map(smallFile).filter((text) => typeof text === 'string');
+    if (found.length) texts.push(...found);
+    else unread = true;
+  }
+  return { texts, unread };
+}
+
+/**
+ * The options curl reads from config files: the user's curlrc files (unless `-q`/`--disable` is
+ * the first option) and each `-K`/`--config` file (configTexts). `unread`: one could not be read,
+ * or names another config; its options are unknown, so it counts as a write.
+ * @param {string[]} args curl's arguments
+ * @param {{name: string, value: string|undefined}[]} given the options of the command line
+ * @param {{files: string[], unread: boolean}} defaults the curlrc files (programDefaults)
+ * @param {{dirs: string[], unknown: boolean}} context
+ * @returns {{options: {name: string, value: string|undefined}[], unread: boolean}}
+ */
+function curlConfigs(args, given, defaults, context) {
+  const off = args[0] === '-q' || args[0] === '--disable';
+  const values = given.filter((o) => o.name === '-K' || o.name === '--config').map((o) => o.value);
+  const { texts, unread } = configTexts(off ? NO_DEFAULTS : defaults, values, context);
+  const options = texts.map(configOptions);
+  return { options: options.filter(Boolean).flat(), unread: unread || options.includes(null) };
+}
+
+/**
+ * The curlrc files curl reads by default: `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc` (and
+ * `.curlrc` there) and `~/.curlrc`. curl stops at the first it finds; the guard reads them all.
+ * @param {Record<string, string|null|undefined>} env the environment
  * @returns {string[]}
  */
 export function curlrcPaths(env) {
-  return unique([env.CURL_HOME ? join(resolve(env.CURL_HOME), '.curlrc') : null, join(env.HOME || homedir(), '.curlrc')].filter(Boolean));
+  const xdg = env.XDG_CONFIG_HOME ? [join(resolve(env.XDG_CONFIG_HOME), 'curlrc'), join(resolve(env.XDG_CONFIG_HOME), '.curlrc')] : [];
+  return unique([env.CURL_HOME ? join(resolve(env.CURL_HOME), '.curlrc') : null, ...xdg, join(env.HOME || homedir(), '.curlrc')].filter(Boolean));
+}
+
+/**
+ * The wgetrc files wget reads by default: `$WGETRC`, else `~/.wgetrc` (the system wgetrc is the
+ * administrator's); the guard reads both.
+ */
+const wgetrcPaths = (env) => unique([env.WGETRC ? resolve(env.WGETRC) : null, join(env.HOME || homedir(), '.wgetrc')].filter(Boolean));
+
+/** A config variable's assigned value as a path, `~` resolved; null when the shell expands it or it is relative to a folder that cannot be told. */
+function configHome(value, context) {
+  const leading = /^~(?=\/|$)/;
+  if (/[$`]/.test(value) || value.replace(leading, '').includes('~')) return null;
+  const path = value.replace(leading, () => context.envs[0]?.HOME || homedir());
+  if (path === '' || posix.isAbsolute(path)) return path;
+  return context.dirs.length === 1 && !context.unknown ? resolve(context.dirs[0], path) : null;
+}
+
+/**
+ * The words that may set a program's environment: the bare assignments and `export` words of the
+ * parts before `segment`, and the segment's own words before the program at `at` (prefixes, `env`).
+ */
+function programWords(segment, at, context) {
+  const before = context.segments.slice(0, Math.max(context.segments.indexOf(segment), 0));
+  const set = before.filter((s) => s.exe === null || s.exe === 'export').flatMap((s) => s.tokens);
+  return [...set, ...segment.tokens.slice(0, at)];
+}
+
+/**
+ * The environments a program may start with: the hook's own (`context.envs`) and, when `words`
+ * assign a variable of CONFIG_HOMES, each of them with those values — both, so an assignment that
+ * does not take effect never hides a file. A value the guard cannot tell is null (configHome).
+ * @param {string[]} words the words before the program (programWords)
+ * @param {{envs: Record<string, string|null|undefined>[], dirs: string[], unknown: boolean}} context
+ * @returns {Record<string, string|null|undefined>[]}
+ */
+function programEnvs(words, context) {
+  const given = {};
+  for (const word of words) {
+    const name = word.slice(0, Math.max(word.indexOf('='), 0));
+    if (ASSIGNMENT.test(word) && CONFIG_VARIABLES.includes(name)) given[name] = configHome(word.slice(name.length + 1), context);
+  }
+  if (Object.keys(given).length === 0) return context.envs;
+  const bases = context.envs.length ? context.envs : [{}];
+  return [...context.envs, ...bases.map((env) => ({ ...env, ...given }))];
+}
+
+/** The default config files of `curl` or `wget` in the environments it may start with; `unread` when one names their folder in a way the guard cannot tell. */
+function programDefaults(program, envs) {
+  const unread = envs.some((env) => CONFIG_HOMES[program].some((name) => env[name] === null));
+  return { files: unique(envs.flatMap(program === 'curl' ? curlrcPaths : wgetrcPaths)), unread };
 }
 
 /**
@@ -788,43 +897,67 @@ function ghApiWrites(args, syntax) {
   return fields.length > 0 && !(methods.length > 0 && methods.every((method) => method === 'GET'));
 }
 
+/** The write a `gh api` call makes (ghApiWrites), or null; `gh`'s other commands are not looked at. */
+function ghWrite(args, syntax) {
+  const api = args.findIndex((a) => !a.startsWith('-'));
+  if (args[api] !== 'api') return null;
+  return ghApiWrites(args.slice(api + 1), syntax) ? 'gh api to GitHub' : null;
+}
+
+/** Whether curl's arguments and config files (curlConfigs) send a change, with the options read. */
+function curlWrites(args, defaults, context) {
+  const given = readOptions(args, CURL_SHORT, (name) => CURL_LONG.has(name));
+  const config = curlConfigs(args, given.options, defaults, context);
+  const read = { options: [...given.options, ...config.options], positionals: given.positionals };
+  const write = config.unread || read.options.some((o) => ((o.name === '-X' || o.name === '--request') && writesBy(o.value)) || CURL_BODY.test(o.name));
+  return { read, write };
+}
+
+/** A wget option that sends a body or sets the method, by any unambiguous prefix (`--post-d`). */
+const wgetWrite = (name) => name.length > 3 && WGET_WRITES.some((option) => option.startsWith(name));
+/** wget's `--config` option, by any unambiguous prefix (`--conf`). */
+const wgetConfig = (name) => name.length >= 6 && '--config'.startsWith(name);
+/** A wgetrc command that sends a body or sets a method other than GET, HEAD or OPTIONS. */
+const wgetrcWrites = (line) => WGET_RC_WRITE.test(line) && !/^\s*method\s*=\s*(?:get|head|options)\s*$/i.test(line);
+
 /**
- * The direct HTTP write a segment makes to a connected service, as `<program> to <host>`, or
- * null: `curl` or `wget` with a writing method or a body to a connected host (or to none it can
- * name), `gh api` that writes (ghApiWrites). `gh`'s other commands are not looked at. curl's
- * config files add their options (curlConfigs); one that cannot be read makes it a write.
+ * Whether wget's arguments and config files send a change, with the options read: a writing
+ * option, an `-e` command or a line of a wgetrc (its default files unless `--no-config`, and each
+ * `--config` file; configTexts) that writes (wgetrcWrites), or a config file it cannot read.
+ */
+function wgetWrites(args, defaults, context) {
+  const read = readOptions(args, WGET_SHORT, (name) => WGET_LONG.has(name) || wgetWrite(name) || wgetConfig(name));
+  const off = read.options.some((o) => o.name === '--no-config');
+  const config = configTexts(off ? NO_DEFAULTS : defaults, read.options.filter((o) => wgetConfig(o.name)).map((o) => o.value), context);
+  const commands = read.options.filter((o) => o.name === '-e' || o.name === '--execute').map((o) => o.value ?? '');
+  const lines = [...commands, ...config.texts.flatMap((text) => text.split(/\r?\n/))];
+  const write = config.unread || lines.some(wgetrcWrites) || read.options.some((o) => wgetWrite(o.name) && (!o.name.startsWith('--me') || writesBy(o.value)));
+  return { read, write };
+}
+
+/**
+ * The direct write a segment makes to a connected service, as `<program> to <host>`, or null:
+ * `curl` or `wget` with a writing method or a body to a connected host (or to none it can name),
+ * `gh api` that writes (ghWrite). `gh`'s other commands are not looked at. curl's and wget's
+ * config files add their options, found in the environments the command gives them
+ * (programEnvs); one that cannot be read makes it a write.
  * @param {{exe: string|null, args: string[], tokens: string[]}} segment
  * @param {string[]} hosts the connected hosts
  * @param {Set<string>} syntax the command's shell syntax (shellSyntax)
- * @param {{curlrc: string[], dirs: string[], unknown: boolean}} context where curl's config files are
+ * @param {{envs: object[], segments: object[], dirs: string[], unknown: boolean}} context where the config files are
  * @returns {string|null}
  */
 function httpWrite(segment, hosts, syntax, context) {
   if (quietSegment(segment)) return null;
   const { tokens } = segment;
-  const from = tokens.length - segment.args.length - 1;
+  const from = executedFrom(segment);
   const at = tokens.findIndex((t, i) => i >= from && ['curl', 'wget', 'gh'].includes(posix.basename(t)));
   if (at < 0) return null;
   const program = posix.basename(tokens[at]);
   const args = tokens.slice(at + 1);
-  if (program === 'gh') {
-    const api = args.findIndex((a) => !a.startsWith('-'));
-    if (args[api] !== 'api') return null;
-    return ghApiWrites(args.slice(api + 1), syntax) ? 'gh api to GitHub' : null;
-  }
-  let write;
-  let read;
-  if (program === 'curl') {
-    read = readOptions(args, CURL_SHORT, (name) => CURL_LONG.has(name));
-    const config = curlConfigs(args, read.options, context);
-    read = { options: [...read.options, ...config.options], positionals: read.positionals };
-    write = config.unread || read.options.some((o) => ((o.name === '-X' || o.name === '--request') && writesBy(o.value)) || CURL_BODY.test(o.name));
-  } else {
-    const wgetWrite = (name) => name.length > 3 && WGET_WRITES.some((option) => option.startsWith(name));
-    read = readOptions(args, WGET_SHORT, (name) => WGET_LONG.has(name) || wgetWrite(name));
-    write = read.options.some((o) => (wgetWrite(o.name) && (!o.name.startsWith('--me') || writesBy(o.value)))
-      || ((o.name === '-e' || o.name === '--execute') && WGET_RC_WRITE.test(o.value ?? '') && !/^\s*method\s*=\s*(?:get|head|options)\s*$/i.test(o.value)));
-  }
+  if (program === 'gh') return ghWrite(args, syntax);
+  const defaults = programDefaults(program, programEnvs(programWords(segment, at, context), context));
+  const { read, write } = (program === 'curl' ? curlWrites : wgetWrites)(args, defaults, context);
   if (!write) return null;
   const urls = [...read.positionals, ...read.options.filter((o) => o.name === '--url').map((o) => o.value ?? '')];
   if (!urls.length) return `${program} to a host it cannot name`;
@@ -856,15 +989,16 @@ async function connectedHosts() {
  * @param {string} cwd the folder it runs in
  * @param {Record<string, string[]>} [writes] tool -> its changing commands (writes.mjs)
  * @param {readonly string[]} [hosts] the connected hosts (CONNECTED_HOSTS and the installation's sites)
- * @param {{curlrc?: string[], depth?: number}} [options] curl's default config files (curlrcPaths),
- *   and how many shells deep `command` runs
+ * @param {{envs?: Record<string, string|null|undefined>[], depth?: number}} [options] the environments
+ *   the command may start with, where curl's and wget's default config files are found (none: no
+ *   default file is read unless the command names its folder), and how many shells deep `command` runs
  * @returns {{verdict: 'free'|'denied'|'write', tools: string[], call?: object, http?: string, nested?: {shell: string, inner: string}}}
  */
-export function classify(command, cwd, writes = WRITES, hosts = CONNECTED_HOSTS, { curlrc = [], depth = 0 } = {}) {
+export function classify(command, cwd, writes = WRITES, hosts = CONNECTED_HOSTS, { envs = [], depth = 0 } = {}) {
   const raw = shellSegments(withoutRedirections(command));
   const parsed = { segments: raw.map(bodyOf), cwd, clis: realClis(writes), writes, nested: new Map() };
   const syntax = shellSyntax(command);
-  const context = { ...workingDirs(parsed.segments, cwd), curlrc, cwd, writes, hosts, depth };
+  const context = { ...workingDirs(parsed.segments, cwd), envs, segments: parsed.segments, text: plainText(command), cwd, writes, hosts, depth };
   const http = parsed.segments.map((segment) => httpWrite(segment, hosts, syntax, context)).find(Boolean);
   if (http) return { verdict: 'denied', tools: [], http };
   // A write inside another shell is denied, not matched with its dry run: the dry run would have
@@ -882,12 +1016,12 @@ export function classify(command, cwd, writes = WRITES, hosts = CONNECTED_HOSTS,
         : inner.http ? `a direct write to a connected service (${inner.http})` : 'an oikos tool call that may write';
     return { verdict: 'denied', tools: inner?.tools ?? ['?'], nested: { shell: nested.shell, inner: what } };
   }
-  const tools = mentionedTools(command, parsed);
+  const { tools, coded } = mentionedTools(command, parsed);
   const free = { verdict: 'free', tools: [...tools] };
   if (!tools.size) return free;
   const verbs = (tools.has('?') ? Object.keys(writes) : [...tools]).flatMap((tool) => writes[tool]);
-  const text = plainText(command);
-  if (!hasVerbWord(text, verbs) && !EXPANDS.test(text)) return free;
+  // Code that mentions a tool may build its command word at run time (`'com'+'ment'`): it passes as a read only.
+  if (!coded && !hasVerbWord(context.text, verbs) && !EXPANDS.test(context.text)) return free;
   // The strict form is read from the segment as written: `if node … edit` is not a call.
   const single = raw.length === 1 && plainCommand(command);
   const call = single ? strictCall(raw[0], cwd, parsed.clis) : null;
@@ -936,8 +1070,8 @@ const nestedReason = ({ shell, inner }, tools) => {
 };
 
 /** The PreToolUse decision for one command. */
-function check(command, cwd, sid, hosts, curlrc) {
-  const result = classify(command, cwd, WRITES, hosts, { curlrc });
+function check(command, cwd, sid, hosts) {
+  const result = classify(command, cwd, WRITES, hosts, { envs: [process.env] });
   if (result.verdict === 'free') return;
   if (result.nested) return deny(nestedReason(result.nested, result.tools));
   if (result.http) {
@@ -985,7 +1119,7 @@ export async function run(payload) {
   const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : process.cwd();
   try {
     const hosts = /\b(?:curl|wget)\b/.test(command) ? await connectedHosts() : CONNECTED_HOSTS;
-    check(command, cwd, sid, hosts, /\bcurl\b/.test(command) ? curlrcPaths(process.env) : []);
+    check(command, cwd, sid, hosts);
   } catch (e) {
     // Fail closed where it matters: a command that may name a write tool, or make a direct HTTP
     // write, is denied, not let through.

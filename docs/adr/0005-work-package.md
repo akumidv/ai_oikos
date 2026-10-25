@@ -2,7 +2,7 @@
 
 Accepted commitments only. Design, alternatives and open points:
 [docs/design/work-package.md](../design/work-package.md). Implementation state:
-[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (F18). Accepted by the owner, 2026-10-22, with the
+[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (F18). Accepted by the owner, with the
 design's open points O1–O4 decided as D01–D03 record. Builds on
 [ADR 0002](0002-local-stores.md) D01 (open `.local/` names are working space).
 
@@ -30,10 +30,17 @@ design's open points O1–O4 decided as D01–D03 record. Builds on
   `HANDOFF.md`. No skill: the convention is in OIKOS.md.
 - **What `--from` may name** — limited as `attach` limits its files, by the same rules (the secret
   guard's `isEnvFile` / `isLocalStore` and `jira attach`'s `localFile` checks, shared, not copied):
-  a real path (symlinks followed, every file of a folder judged) inside the installation or the
-  session scratchpad only; never a home or network path (`~/.ssh`, `~/.aws`, `~/.config`, `\\host`),
+  a real path (symlinks followed, every file of a folder judged) inside the installation or a scratch
+  folder only; never a home or network path (`~/.ssh`, `~/.aws`, `~/.config`, `\\host`),
   a closed store of `.local/`, an `.env*` file, or a dot-named entry outside an open `.local/`
   folder. One refused entry refuses the whole park, before anything is copied.
+- **Scratch sources — owner's decision D-PARK-SCRATCH.** A scratch folder is the one named by
+  `$OIKOS_SCRATCH`, or a Claude Code session scratchpad of this installation
+  (`<tmp>/claude-<uid>/<slug>/<session>/scratchpad`, `<tmp>` = `os.tmpdir()`, `<slug>` the
+  installation's path with `/` and `_` replaced by `-`); the rest of the temporary folder (other
+  projects' scratchpads, loose files) is no source. A scratch folder is the user's own, is not the
+  home folder, holds or lies in it, and lies in no `.local/`, or it is no root; a park also writes only
+  inside `.local/<package>/` and `.local/` (no symlink as the folder, a destination or a path out of it).
 - **Rationale.** The steps are mechanical and come when the context is shortest; the content is
   judgment and stays the agent's. A copy into `.local/` must not become a way round the secret
   guard: what the agent may not read, `park` may not carry.
@@ -41,7 +48,7 @@ design's open points O1–O4 decided as D01–D03 record. Builds on
 ## D03 — `park` is a local write, previewed, not guarded
 <a id="dec-0005-d03"></a>`Decision-ID: DEC-0005/D03`
 
-- **Choice.** `park` writes only local files and is not an external write (owner, 2026-10-22).
+- **Choice.** `park` writes only local files and is not an external write (owner).
   Without `--yes` it prints what it would copy and write and changes nothing; with `--yes` it
   writes. It takes no `--dry-run` and is not listed in `tools/hooks/writes.mjs`.
 - **Rationale.** `tools/hooks/writes.mjs` lists the verbs that write to an external service; local

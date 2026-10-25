@@ -214,6 +214,7 @@ test('setup init makes an installation and refuses the core', () => {
     assert.ok(existsSync(join(dir, f)), f);
   }
   assert.equal(realpathSync(join(dir, 'oikos')), CORE);
+  assert.match(readFileSync(join(dir, '.gitignore'), 'utf8'), /^\.local\/\n# personal data[^\n]*\n\.local\/private\.yaml\n/m, 'the people file is named in the .gitignore, with its comment');
   assert.match(readFileSync(join(dir, 'oikos.yaml'), 'utf8'), /OIKOS_CHROME_PORT: \d+/);
   assert.equal(tool(dir, 'sync', ['--check']).status, 0);
 

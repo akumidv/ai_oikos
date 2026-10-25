@@ -498,6 +498,32 @@ export function policyReason(conflict, path) {
     + `(${sources.length ? `source: ${sources.join(', ')}` : 'no source recorded'})`;
 }
 
+/**
+ * The policy refusal of a tracker that keeps no transition rules of its own — `github-issues` and
+ * `gitlab-issues`, where an agent moves among the statuses its settings list (ADR 0004 D-POLICY-HOSTS):
+ * the text after `refused: ` when any of `names` is a person-only status of the policy that holds for
+ * `projectKey`, else null. It names the status, the policy path and its source, and — when the
+ * settings' agent list would have let an agent move it — that list as the rule the policy overrides.
+ *
+ * @param {object|undefined} part the validated `task-tracking.<connector>` mapping, undefined when absent
+ * @param {string|null} projectKey the project the policy is read for (the tracker's own key)
+ * @param {string[]} names the statuses (or status labels) the change moves into, out of or touches
+ * @param {{ path: string, what: string, agent: { setting: string, statuses: string[] } }} where `path` is
+ *   where the part sits (`task-tracking.github-issues`), `what` the change as a sentence subject, `agent`
+ *   the setting that lists the statuses open to an agent and their names
+ * @returns {string|null} `policy: <what> — <status> is person-only by <path>… (source: …)[; <setting> lists … as open to an agent (mode agent), which the policy overrides]`
+ */
+export function statusPolicyRefusal(part, projectKey, names, { path, what, agent }) {
+  if (!isMap(part)) return null;
+  const policy = effectivePolicy(part, projectKey);
+  const wanted = names.filter(isText).map(normal);
+  const statuses = policy.personOnly.filter((p) => wanted.includes(normal(p.status)));
+  if (!statuses.length) return null;
+  const listed = statuses.filter((p) => agent.statuses.some((s) => normal(s) === normal(p.status))).map((p) => p.status);
+  const overridden = listed.length ? `; ${agent.setting} lists ${listed.join(', ')} as open to an agent (mode agent), which the policy overrides` : '';
+  return `policy: ${what} — ${policyReason({ statuses, sources: policy.sources }, path)}${overridden}`;
+}
+
 const MOVES_SHOWN = 6;
 
 /**

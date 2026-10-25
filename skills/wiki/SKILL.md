@@ -31,7 +31,8 @@ else the default. Then read the connector's file and drive its tool as it says.
 - A **knowledge question** goes to the knowledge base the installation names (its MCP server)
   first; the wiki is for a specific page, or when the knowledge base may be behind.
 - Read the page (and its version) before every write; dry run, show, write after the user's yes.
-- Content is English unless the user says otherwise.
+- Content is English unless the user says otherwise, and passes the tools' content check
+  (OIKOS.md, *What goes out*): no assistant, local path or secret in it.
 - An operation a connector does not offer (its "Not here, on purpose") is said, with the route
   a person takes — never emulated another way.
 - Which spaces exist and what each is for is the organization's — see its resource note.

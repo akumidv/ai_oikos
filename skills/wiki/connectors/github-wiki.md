@@ -42,8 +42,11 @@ node oikos/tools/github-wiki/cli.mjs replace-section --page Home --heading "Roll
 ```
 
 - Run `info` (or `read`) before every write: it confirms the page and the wiki's commit.
-- The body is markdown and is written as given. Content is **English** — the tool refuses
-  non-Latin text unless `--allow-non-english` is passed.
+- The body is markdown and is written as given. Titles, headings, bodies and the version message
+  go through the one content check (OIKOS.md, *What goes out*): the dry run lists each flagged
+  line and exits 3, the real run refuses (`refused: content check:`) unless `--allow-flagged`
+  (or `--allow-non-english`) is in the command, dry run and write alike; a secret is never
+  overridable.
 - The dry run clones, applies the change in memory and prints the repository, the page, the base
   commit, the current text (the section, or the end of the page for `append`) and the new text,
   the commit message and identity; it pushes nothing.
@@ -106,3 +109,8 @@ Without a credential every command stops with exit 1 and names the missing key, 
 - **Write a page in another format than markdown** — the web interface.
 - **Pages under a parent** — the GitHub wiki is flat; link pages from `_Sidebar` instead.
 - **`search --mine`** — not offered.
+
+## People key
+
+A GitHub login is the key **`github`** in the people file
+([github-issues](../../task-tracking/connectors/github-issues.md) § People key).

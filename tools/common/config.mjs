@@ -12,11 +12,14 @@
 //   mcp_servers: { knowledge: { type: http, url: https://kb.acme.example/mcp } }
 //   brand: { palette: { accent: 1F4E79 }, fonts: { body: { name: Inter, file: fonts/Inter.ttf } } }   # tools/documents
 //   task-tracking: { jira: { defaults: { default: person, transitions: [ … ] }, projects: { PROJ: { … } } } }   # transitions.mjs
+//   agents: [desk]                                       # the standing agents switched on (agents/<name>/README.md in the core)
+//   desk: { warm_days: 30, cold_days: 90 }               # the desk agent's compaction thresholds (desk.mjs)
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { installRoot, INSTALL_FILE } from './paths.mjs';
 import { taskTrackingProblems } from './transitions.mjs';
+import { deskProblems } from './desk.mjs';
 
 /** The installation's `oikos.yaml`, or null outside an installation. */
 export const configFile = () => (installRoot() ? join(installRoot(), INSTALL_FILE) : null);
@@ -25,9 +28,9 @@ const isMap = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
 let cached;
 /**
- * { organization, connectors, settings, mcp_servers, brand, 'task-tracking', problems } — every part
- * present, maybe empty. A malformed `task-tracking` part is kept as written; its problems, each
- * with its path, are in `problems`.
+ * { organization, connectors, settings, mcp_servers, brand, 'task-tracking', agents, desk, problems }
+ * — every part present, maybe empty (`agents` is a list of names). A malformed `task-tracking` or
+ * `desk` part is kept as written; its problems, each with its path, are in `problems`.
  */
 export function config() {
   if (cached) return cached;
@@ -53,9 +56,14 @@ export function config() {
   }
   const taskTracking = part('task-tracking');
   problems.push(...taskTrackingProblems(taskTracking).map((p) => `${INSTALL_FILE}: ${p}`));
+  const desk = part('desk');
+  problems.push(...deskProblems(desk).map((p) => `${INSTALL_FILE}: ${p}`));
+  let agents = [];
+  if (isMap(raw.agents)) problems.push(`${INSTALL_FILE}: 'agents' must be a list of agent names`);
+  else if (raw.agents !== undefined && raw.agents !== null) agents = (Array.isArray(raw.agents) ? raw.agents : String(raw.agents).split(',')).map((a) => String(a).trim()).filter(Boolean);
   cached = {
     organization: part('organization'), connectors, settings: part('settings'), mcp_servers: part('mcp_servers'), brand: part('brand'),
-    'task-tracking': taskTracking, problems,
+    'task-tracking': taskTracking, agents: [...new Set(agents)], desk, problems,
   };
   return cached;
 }

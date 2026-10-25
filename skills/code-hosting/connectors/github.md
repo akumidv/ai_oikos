@@ -29,8 +29,13 @@ node oikos/tools/github/cli.mjs merged --repo acme/app --since 2026-07-01 [--lim
   history, force pushes, deletions); the deployment environments (required reviewers, wait timer,
   which branches may deploy); and CODEOWNERS — the first of `.github/CODEOWNERS`, `CODEOWNERS`,
   `docs/CODEOWNERS`, as GitHub looks, with its rules. A part the token cannot read is named, not
-  fatal: protection answers 404 both when the branch is not protected and when the token is not an
-  admin's — report it as "not protected, or needs admin", never as "not protected".
+  fatal, and the other parts are still read. `--json` gives each part a `state`: `ok` (with
+  `data`), `unreadable` (with `why`: a 403, or a 404 for a part of a repository that was itself
+  read — the permission or the plan, never "nothing there"), or `absent`: for CODEOWNERS (no file
+  at any of its paths, each answering 404 "Not Found"; a 404 about the ref is `unreadable`) and for the classic protection only when GitHub answers 404 "Branch not
+  protected". Any other 404 of the protection is `unreadable` ("not readable with this token
+  (needs Administration read)"), since GitHub answers it also when the token is not an admin's —
+  never report it as "not protected".
 - `merged` lists the pull requests merged since a date — author, who merged, approving reviewers,
   review count, hours from open to merge — and totals them: count, median and mean hours open→merge,
   the share merged with at least one approval and the share merged by their own author. One
@@ -65,3 +70,8 @@ ask for a token in the chat.
 
 `merged` needs **Pull requests** and **Metadata** only. A classic token or the `gh` login reads
 them all with `repo`, protection still only for a repository admin.
+
+## People key
+
+A person's GitHub login is in the people file under the key **`github`** (the same key as the
+issues connector: [github-issues](../../task-tracking/connectors/github-issues.md) § People key).

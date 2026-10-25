@@ -9,6 +9,7 @@ import { codeownersRules } from '../common/governance.mjs';
 export const CODEOWNERS_PATHS = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'];
 const MERGED_PAGE = 50;
 const APPROVALS_PER_PULL = 20;
+const UNREADABLE = 'not readable with this token (needs Administration read)';
 
 /** GitHub's own message in an error body (JSON `message`), else the body's start. */
 function bodyMessage(body) {
@@ -19,17 +20,35 @@ function bodyMessage(body) {
   }
 }
 
+/** GitHub's message for the classic protection of a branch that has none (the one 404 that is an answer). */
+const NOT_PROTECTED = 'Branch not protected';
+
 /**
  * A read whose absence or refusal is an answer: { state: 'ok', data } | { state: 'absent' } |
- * { state: 'refused', status: 403, message }.
+ * { state: 'unreadable', why }. A 403 is always `unreadable` (the token's permission or the plan
+ * refuses it; `why` carries GitHub's message). A 404 is `unreadable` by default, since GitHub
+ * answers it both for a part hidden from the token and for one that is missing, and a part of a
+ * repository that was itself just read is never taken as absent; only a probe whose 404 really is
+ * absence passes `absentMessage`: the 404 with exactly that message is absent, any other stays
+ * `unreadable` (the branch protection's "Branch not protected"; a CODEOWNERS path's "Not Found",
+ * which a bad ref's "No commit found for the ref" is not).
+ *
+ * @param {object} g a client from `githubClient`
+ * @param {string} path the API path
+ * @param {{ absentMessage?: string }} [opts] which 404 message means absence; the rest goes to `g.api`
+ * @returns {Promise<{ state: 'ok', data: any } | { state: 'absent' } | { state: 'unreadable', why: string }>}
  */
-async function optional(g, path, opts = {}) {
+async function optional(g, path, { absentMessage, ...opts } = {}) {
   try {
-    const r = await g.api(path, { ...opts, absentOn404: true });
-    return r === null ? { state: 'absent' } : { state: 'ok', data: r.data };
+    const r = await g.api(path, { ...opts, rawOn404: true });
+    return { state: 'ok', data: r.data };
   } catch (e) {
-    if (e instanceof HttpError && e.status === 403) return { state: 'refused', status: 403, message: bodyMessage(e.body) };
-    throw e;
+    if (!(e instanceof HttpError)) throw e;
+    const message = bodyMessage(e.body);
+    if (e.status === 403) return { state: 'unreadable', why: `refused (403) — ${message}` };
+    if (e.status !== 404) throw e;
+    if (message === absentMessage) return { state: 'absent' };
+    return { state: 'unreadable', why: `GitHub answered 404 — ${message}` };
   }
 }
 
@@ -37,8 +56,11 @@ async function optional(g, path, opts = {}) {
  * The governance of `repo` (`owner/name`) on `branch` (default: the default branch): the rules in
  * force on the branch, the repository's rulesets, the classic protection of the branch, the
  * environments (with the custom branch policies of those that have them) and the CODEOWNERS file in
- * force. Each part is { state, data|message } as `optional` reads it; `codeowners` is
- * { state, path, rules } or { state: 'absent', looked }.
+ * force. Each part is { state: 'ok', data } or { state: 'unreadable', why } as `optional` reads it
+ * (`unreadable` never means unprotected or absent: a 403 or 404 there is the token's permission or
+ * the plan); `protection` is `absent` only when GitHub says the branch is not protected.
+ * `codeowners` is { state: 'ok', path, rules }, { state: 'absent', looked } when no path has the
+ * file, or `unreadable`.
  *
  * @param {object} g a client from `githubClient`
  * @param {string} repo `owner/name`
@@ -51,7 +73,7 @@ export async function githubGovernance(g, repo, { branch } = {}) {
   const b = encodeURIComponent(ref);
   const rules = await optional(g, `/repos/${repo}/rules/branches/${b}?per_page=100`);
   const rulesets = await optional(g, `/repos/${repo}/rulesets?includes_parents=true&per_page=100`);
-  const protection = await optional(g, `/repos/${repo}/branches/${b}/protection`);
+  const protection = await optional(g, `/repos/${repo}/branches/${b}/protection`, { absentMessage: NOT_PROTECTED });
   const environments = await optional(g, `/repos/${repo}/environments?per_page=100`);
   if (environments.state === 'ok') {
     const withPolicies = [];
@@ -70,14 +92,17 @@ export async function githubGovernance(g, repo, { branch } = {}) {
 
 /**
  * The CODEOWNERS file in force in `repo` at `ref`: the first of CODEOWNERS_PATHS that exists, as
- * { state: 'ok', path, rules }; { state: 'absent', looked } when none does; a refusal as `optional`.
+ * { state: 'ok', path, rules }; { state: 'absent', looked } when none does; `unreadable` as
+ * `optional` answers (a refusal ends the search).
  */
 async function githubCodeowners(g, repo, ref) {
   for (const path of CODEOWNERS_PATHS) {
+    // GitHub's 404 "Not Found" is the file missing at this path (the other paths are probed next); a
+    // 404 for a bad ref says otherwise and is unreadable.
     const r = await optional(g, `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`, {
-      headers: { Accept: 'application/vnd.github.raw+json' }, as: 'text',
+      headers: { Accept: 'application/vnd.github.raw+json' }, as: 'text', absentMessage: 'Not Found',
     });
-    if (r.state === 'refused') return r;
+    if (r.state === 'unreadable') return r;
     if (r.state === 'ok') return { state: 'ok', path, rules: codeownersRules(r.data) };
   }
   return { state: 'absent', looked: CODEOWNERS_PATHS };
@@ -134,7 +159,7 @@ function environmentText(env) {
   return `${env.name}: ${parts.join(' · ')}`;
 }
 
-const refusedText = (part, need) => `refused (403): ${need} — ${part.message}`;
+const unavailable = (part, need) => `not available: ${need} — ${part.why}`;
 
 /**
  * The governance object of `githubGovernance` as compact lines for an agent's context.
@@ -152,25 +177,25 @@ export function githubGovernanceLines(gov) {
       const params = parametersText(r.parameters);
       out.push(`  - ${r.type}${source}${params ? `: ${params}` : ''}`);
     }
-  } else out.push(`rules on ${gov.branch}: ${gov.rules.state === 'refused' ? refusedText(gov.rules, 'needs Metadata read') : 'not available'}`);
+  } else out.push(`rules on ${gov.branch}: ${unavailable(gov.rules, 'needs Metadata read')}`);
   if (gov.rulesets.state === 'ok') {
     out.push(`rulesets: ${gov.rulesets.data.length}`);
     for (const s of gov.rulesets.data) out.push(`  #${s.id} ${s.name} · ${s.target || 'branch'} · ${s.enforcement} · ${s.source_type || '?'} ${s.source || ''}`.trimEnd());
-  } else out.push(`rulesets: ${gov.rulesets.state === 'refused' ? refusedText(gov.rulesets, 'needs Metadata read, or the plan has no rulesets') : 'not available'}`);
+  } else out.push(`rulesets: ${unavailable(gov.rulesets, 'needs Metadata read, or the plan has no rulesets')}`);
   if (gov.protection.state === 'ok') out.push(`protection of ${gov.branch}: ${protectionText(gov.protection.data)}`);
-  else if (gov.protection.state === 'absent') out.push(`protection of ${gov.branch}: not protected, or needs admin (Administration read) — GitHub answers 404 for both`);
-  else out.push(`protection of ${gov.branch}: ${refusedText(gov.protection, 'needs admin (Administration read)')}`);
+  else if (gov.protection.state === 'absent') out.push(`protection of ${gov.branch}: none (GitHub says the branch is not protected)`);
+  else out.push(`protection of ${gov.branch}: ${UNREADABLE} — ${gov.protection.why}`);
   if (gov.environments.state === 'ok') {
     const envs = gov.environments.data.environments || [];
     out.push(`environments: ${envs.length}`);
     for (const env of envs) out.push(`  ${environmentText(env)}`);
-  } else out.push(`environments: ${gov.environments.state === 'refused' ? refusedText(gov.environments, 'needs Actions read (verify)') : 'none, or not available'}`);
+  } else out.push(`environments: ${unavailable(gov.environments, 'needs Actions read (verify)')}`);
   const co = gov.codeowners;
   if (co.state === 'ok') {
     out.push(`CODEOWNERS: ${co.path} — ${co.rules.length} rule(s)`);
     for (const line of co.rules) out.push(`  ${line}`);
   } else if (co.state === 'absent') out.push(`CODEOWNERS: none (looked in ${co.looked.join(', ')})`);
-  else out.push(`CODEOWNERS: ${refusedText(co, 'needs Contents read')}`);
+  else out.push(`CODEOWNERS: ${co.why}`);
   return out;
 }
 

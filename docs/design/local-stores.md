@@ -7,7 +7,7 @@ the alternatives and the open points.
 
 The secret guard (`tools/hooks/host.mjs`, `tools/hooks/secret-guard.mjs`) closed every folder
 under `.local/` except `resources/`. The rule came from an incident: `cat
-.local/browser/Default/Cookies` passed (DEVELOPMENT.md, experience entry on the guard). Closing
+.local/browser/Default/Cookies` passed. Closing
 every folder fixed it, but it also closed personal working folders: an installation's `.local/cv/`
 (a CV task's notes and drafts) could not be read. The open entry, `resources/`, was not created
 or read by anything — the organization's `resources/` sits at the installation's root.

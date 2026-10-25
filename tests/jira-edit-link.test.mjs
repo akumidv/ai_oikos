@@ -237,3 +237,35 @@ test('unlink --dry-run without credentials names only the id and reaches nothing
   assert.match(r.stdout, /no Jira credentials/);
   assert.deepEqual(fake.calls(), []);
 });
+
+// -- the content check of labels (ADR 0003 D01, D-OUT-LABELS) -------------------------------------------
+
+test('labels: --labels and --add-labels go through the content check — flagged in the dry run, refused by the write, overridden by --allow-flagged; --remove-labels sends no new text', () => {
+  const CREATE_LABELS = ['create', '--project', 'PROJ', '--summary', 'Export the report', '--labels', 'release,/tmp/notes'];
+  const dry = run([], [...CREATE_LABELS, '--dry-run']);
+  assert.equal(dry.status, 3, dry.output);
+  assert.match(dry.stdout, /^CHECK outgoing text: 1 finding\(s\)\n {2}labels line 2: path — \/tmp\/ {2}│ \/tmp\/notes$/m);
+  assert.match(dry.stderr, /^flagged: content check: path/m);
+  const real = run([], CREATE_LABELS);
+  assert.equal(real.status, 3, real.output);
+  assert.match(real.stderr, /^refused: content check: path — nothing written/);
+  assert.deepEqual(real.calls, []);
+  const allowed = run([], [...CREATE_LABELS, '--dry-run', '--allow-flagged']);
+  assert.equal(allowed.status, 0, allowed.output);
+  assert.match(allowed.stdout, /\(overridden\)/);
+
+  const edit = run([], ['edit', '--task', 'PROJ-7', '--add-labels', 'ok,/home/ada/x', '--dry-run']);
+  assert.equal(edit.status, 3, edit.output);
+  assert.match(edit.stdout, /^ {2}labels line 2: path — \/home\/ada\//m);
+  const remove = run([], ['edit', '--task', 'PROJ-7', '--remove-labels', '/tmp/notes', '--dry-run']);
+  assert.equal(remove.status, 0, remove.output);
+});
+
+test('labels: a secret in a label is masked and never overridden by --allow-flagged', () => {
+  const token = `ghp_${'a'.repeat(36)}`;
+  const r = run([], ['edit', '--task', 'PROJ-7', '--add-labels', token, '--dry-run', '--allow-flagged']);
+  assert.equal(r.status, 3, r.output);
+  assert.match(r.stdout, /labels line 1: secret — ghp_… \(40 characters\)/);
+  assert.doesNotMatch(r.output, /ghp_a{4}/);
+  assert.deepEqual(r.calls, []);
+});

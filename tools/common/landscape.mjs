@@ -2,6 +2,8 @@
 // - skills (skills/<name>/SKILL.md): one per kind of work — code hosting, task tracking, … — each
 //   with the connectors it can drive (`connectors:`), one file per connector in
 //   skills/<name>/connectors/<connector>.md;
+// - standing agents (agents/<name>/README.md): a thin charter over skills, switched on by the
+//   installation's `agents:` (ADR 0006);
 // - the installation's `oikos.yaml` `connectors:` — which of them this organization uses
 //   for each skill, the first being the default (config.mjs);
 // - resource notes (the installation's resources/<id>.md — they describe one organization, so they
@@ -17,8 +19,14 @@ import { join } from 'node:path';
 import YAML from 'yaml';
 import { CORE_ROOT, installRoot, INSTALL_FILE, coreLabel } from './paths.mjs';
 import { config } from './config.mjs';
+import { isStoreName } from '../hooks/host.mjs';
 
 export const SKILLS = join(CORE_ROOT, 'skills');
+/** The standing agents: `agents/<name>/README.md`, a thin charter over skills (ADR 0006). */
+export const AGENTS = join(CORE_ROOT, 'agents');
+const AGENT_KEYS = ['name', 'description', 'skills', 'owns'];
+/** The headings a charter has, each as `## <heading…>` — the text may go on after the heading (ADR 0006 D01). */
+export const AGENT_SECTIONS = Object.freeze(['Mission', 'Skills', 'Owns', 'Never', 'Session start', 'Closing a topic', 'Workers']);
 /** The installation's resource notes folder, or null outside an installation. */
 export const resourcesDir = () => (installRoot() ? join(installRoot(), 'resources') : null);
 const RES = 'resources';
@@ -30,6 +38,7 @@ export const GROUPS = Object.freeze({
   files: 'the user\'s documents and where they are',
   web: 'web resources used through their interface',
   hr: 'people: candidates, CVs, hiring, the footprint of a person\'s work',
+  ongoing: 'ongoing processes that run beside the rest of the work: notes from chats and discussions, kept as said and turned into tasks',
 });
 const RESOURCE_KEYS = ['id', 'title', 'domain', 'status', 'resource', 'kind', 'network', 'url', 'auth'];
 
@@ -56,8 +65,47 @@ function read(file, label, problems) {
 }
 
 /**
+ * The standing agents of the core and every problem of their charters (the core-side checks of
+ * ADR 0006 D01): frontmatter keys, the name equal to the folder, every listed skill existing, `owns`
+ * not a closed or legacy store of `.local/`, the sections of the charter, a name not shared with a skill.
+ * agents: [{ ...frontmatter, dir, skills: [name], enabled, file }] — `enabled` is whether the
+ * installation lists the agent under `agents:` in its `oikos.yaml`.
+ * @param {string[]} skillDirs the names of the core's skills
+ * @param {string} root the folder of the charters (the core's `agents/`; a test passes its own)
+ */
+export function loadAgents(skillDirs = existsSync(SKILLS) ? readdirSync(SKILLS, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [], root = AGENTS) {
+  const problems = [];
+  const agents = [];
+  const dirs = existsSync(root) ? readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort() : [];
+  const enabled = config().agents;
+  for (const dir of dirs) {
+    const label = `agents/${dir}/README.md`;
+    const file = join(root, dir, 'README.md');
+    if (!existsSync(file)) { problems.push(`agents/${dir}: no README.md`); continue; }
+    const parsed = read(file, label, problems);
+    if (!parsed) continue;
+    const { fm, body } = parsed;
+    for (const k of AGENT_KEYS) if (!fm[k]) problems.push(`${label}: missing '${k}'`);
+    if (!fm.metadata?.owner) problems.push(`${label}: missing 'metadata.owner'`);
+    if (fm.name && fm.name !== dir) problems.push(`${label}: name '${fm.name}' differs from the folder`);
+    if (skillDirs.includes(dir)) problems.push(`${label}: the name is also a skill's — both are delivered as a pointer of that name; rename one`);
+    const skills = list(fm.skills);
+    for (const s of skills) if (!skillDirs.includes(s)) problems.push(`${label}: skill '${s}' does not exist in skills/`);
+    const owns = fm.owns === undefined ? '' : String(fm.owns);
+    if (owns && (isStoreName(owns) || /[\\/:]/.test(owns) || owns === '.' || owns === '..')) {
+      problems.push(`${label}: owns '${owns}' must be one open folder name of .local/ — not a closed or legacy store, not a path`);
+    }
+    const headings = [...body.matchAll(/^## (.+)$/gm)].map((m) => m[1].trim());
+    for (const h of AGENT_SECTIONS) if (!headings.some((x) => x === h || x.startsWith(`${h} `))) problems.push(`${label}: missing the section '## ${h}'`);
+    agents.push({ ...fm, dir, skills, enabled: enabled.includes(dir), file: coreLabel(label) });
+  }
+  return { agents, problems };
+}
+
+/**
  * Skills, resources and the links between them, plus every schema problem found.
  * skills: [{ ...frontmatter, dir, group, connectors: [name], configured: [name], file }]
+ * agents: loadAgents() — the standing agents, with whether this installation switches each on;
  *   (`configured` is what the installation lists for the skill, default first; empty when it lists
  *   none — then no connector of the skill is used here, as common/cli.mjs requireConnector enforces);
  * resources: [{ ...frontmatter, via: [name], purpose, file, skills: [name] }].
@@ -93,6 +141,12 @@ export function loadLandscape() {
   }
   for (const s of Object.keys(cfg.connectors)) if (!dirs.includes(s)) problems.push(`${INSTALL_FILE}: connectors.${s} — no such skill`);
 
+  const found = loadAgents(dirs);
+  problems.push(...found.problems);
+  const agents = found.agents;
+  // Installation side: a listed agent must exist (the core has no `agents:`, so this fires only in an installation).
+  for (const a of cfg.agents) if (!agents.some((x) => x.dir === a)) problems.push(`${INSTALL_FILE}: agents names '${a}', which oikos does not have (${agents.map((x) => x.dir).join(', ') || 'none'})`);
+
   // A name in a resource's `via` is a skill or one of a skill's connectors.
   const reachedBy = (name) => skills.filter((s) => s.dir === name || s.connectors.includes(name)).map((s) => s.dir);
   const resources = [];
@@ -114,5 +168,5 @@ export function loadLandscape() {
     const purpose = (body.match(/## What it is for\n+([\s\S]*?)(\n## |$)/)?.[1] || '').trim().replace(/\s+/g, ' ');
     resources.push({ ...fm, auth_env: list(fm.auth_env), via, purpose, file: `${RES}/${file}`, skills: [...reaching].sort() });
   }
-  return { resources, skills, problems };
+  return { resources, skills, agents, problems };
 }

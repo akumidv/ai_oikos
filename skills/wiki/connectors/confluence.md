@@ -30,8 +30,10 @@ node oikos/tools/confluence/cli.mjs replace-section --page <id> --heading "Rollo
 
 - Run `info` (or `read`) before every write: it confirms the page and its version.
 - Bodies are a markdown subset (headings, lists, code, rules, `code`, `**bold**`, `[links](url)`);
-  anything else degrades to text. Content is **English** — the tool refuses non-Latin text unless
-  `--allow-non-english` is passed.
+  anything else degrades to text. Titles, headings and bodies go through the one content check
+  (OIKOS.md, *What goes out*): the dry run lists each flagged line and exits 3, the real run
+  refuses (`refused: content check:`) unless `--allow-flagged` (or `--allow-non-english`) is in
+  the command, dry run and write alike; a secret is never overridable.
 - `create` refuses when a page with that title already exists in the space.
 - `replace-section` replaces everything under a top-level heading up to the next heading of the
   same or higher level, keeping the heading; its dry run prints the current and the new text.
@@ -54,3 +56,8 @@ the skill `task-tracking`.
 Without them every command stops with exit 1 and names the missing keys, before any request; only
 `append --dry-run` and `create --dry-run`, whose preview reads nothing from Confluence, still show
 it — the write itself needs the credentials.
+
+## People key
+
+Confluence takes the same Atlassian account id as Jira: the key **`jira`** in the people file
+([jira](../../task-tracking/connectors/jira.md) § People key), for a mention or an author filter.

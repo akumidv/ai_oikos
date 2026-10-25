@@ -7,7 +7,7 @@ metadata:
   group: engineering
 surface: the organization's task tracker — tasks, boards, sprints, goals; reads, and writes after a confirmed dry run
 connectors: jira, github-issues, gitlab-issues
-refuses: a move the installation's rules leave to a person (without rules, any move beyond the early statuses), moving a task whose result is not clear (the assignee is asked instead), deleting issues, and fetching the tracker with a web-fetch tool
+refuses: a move the installation's rules leave to a person (without rules, any move beyond the early statuses), moving a task whose result is not clear (it is judged first, [scenarios/review-result.md](scenarios/review-result.md); the assignee is asked when no result is found), deleting issues, and fetching the tracker with a web-fetch tool
 ---
 
 # task-tracking
@@ -40,7 +40,8 @@ means, how goals attach — is the organization's, not oikos's: it is in the res
   has an upper bound. The dry run and the write are each one standalone command, identical except
   `--dry-run` — nothing chained around them ([OIKOS.md](../../OIKOS.md), *Writes need
   confirmation*).
-- Text written into the tracker is English unless the user says otherwise.
+- Text written into the tracker is English unless the user says otherwise, and passes the tools'
+  content check (OIKOS.md, *What goes out*): no assistant, local path or secret in it.
 - An operation a connector does not offer (its "Not here, on purpose") is said, with the route
   a person takes — never emulated another way.
 
@@ -76,6 +77,7 @@ it before starting; for anything else, work from the connector file and the rule
 | Scenario | When | Read |
 |---|---|---|
 | Moving a task by a `confirm` rule | a move to review, done, closed… that the rules leave to `confirm` | [scenarios/move-task.md](scenarios/move-task.md) |
+| Judging a task's result against its "Done when" | "is it done", "review what came in", before proposing a move or a comment to the assignee | [scenarios/review-result.md](scenarios/review-result.md) |
 | Setting a project up | a move for a project the rules do not list, an empty repository pool, a pull request outside the pool, or on request | [scenarios/project-setup.md](scenarios/project-setup.md) |
 | Checking the rules against the organization's policy | a move refused by the policy, a `## Policy` conflict or a `sync --check` warning, the knowledge-base page on who moves changed, or on request | [scenarios/policy-check.md](scenarios/policy-check.md) |
 

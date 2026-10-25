@@ -35,3 +35,9 @@ How the organization names and uses its channels is the organization's — see i
   confirms. Write in the language the channel uses.
 - "Me" is the account that connected the connector; if it is not the person in the other
   connectors, say so.
+
+## Scenarios
+
+| Scenario | When | Read |
+|---|---|---|
+| The thread of a task | "what was discussed about PROJ-123", the desk reviewing a task | [scenarios/thread-of-task.md](scenarios/thread-of-task.md) |

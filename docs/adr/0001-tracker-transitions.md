@@ -28,7 +28,7 @@ Accepted commitments only. Design, alternatives and open points:
   asks; the move runs on the user's answer. `person` — refused, exit 3, the task link printed.
   A move no rule describes takes `default` (`person` unless set).
 - **Rationale.** Lowers "refused" to "confirmed" only for the moves an installation chooses.
-- **Amended 2026-10-22** by [ADR 0004 D03](0004-tracker-policy.md#dec-0004-d03): where a policy
+- **Amended** by [ADR 0004 D03](0004-tracker-policy.md#dec-0004-d03): where a policy
   names the status, the stricter of rule and policy decides; a move into or out of a person-only
   status is refused as `person`.
 

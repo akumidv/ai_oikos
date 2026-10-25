@@ -366,6 +366,110 @@ test('comment posts the markdown note; the dry run with credentials reads the is
   assert.match(real.r.stdout, /#note_77$/m);
 });
 
+// == the organization's policy (ADR 0004, D-POLICY-HOSTS) ==
+
+const KB = 'https://kb.example.com/tracker-rules';
+const BY = `task-tracking\\.gitlab-issues\\.defaults\\.policy \\(source: ${KB.replace(/\./g, '\\.')}\\)`;
+/** `gitlabInstall` plus a `task-tracking.gitlab-issues` part: `personOnly` as the defaults' policy, `projects` as written. */
+function policyInstall(personOnly, { projects = '', overrides = {} } = {}) {
+  const lines = Object.entries({ ...SETTINGS, ...overrides }).filter(([, v]) => v !== null).map(([k, v]) => `  ${k}: ${v}`).join('\n');
+  return installation((t) => `${t.replace('task-tracking: [jira]', 'task-tracking: [gitlab-issues]').replace('settings:', `settings:\n${lines}`).trimEnd()}
+task-tracking:
+  gitlab-issues:
+    defaults:
+      policy:
+        person_only: [${personOnly}]
+        source: ${KB}
+${projects}`);
+}
+
+function assertPolicyRefused(res, pattern) {
+  assert.equal(res.r.status, 3, res.r.output);
+  assert.match(res.r.stderr, /^refused: policy: /m);
+  assert.match(res.r.stderr, pattern);
+  assert.deepEqual(writes(res.calls), [], 'a refusal writes nothing');
+}
+
+test('policy: a move into a person-only status is refused before any request, dry run and real run', () => {
+  const dir = policyInstall('In Progress');
+  for (const args of [['--dry-run'], []]) {
+    const res = run(dir, ['transition', '--task', '#12', '--to', 'in progress', ...args], []);
+    assertPolicyRefused(res, new RegExp(`^refused: policy: moving acme-corp/tools#12 to 'in progress' is a person's move — In Progress is person-only by ${BY}; GITLAB_AGENT_STATUSES lists In Progress as open to an agent \\(mode agent\\), which the policy overrides — move acme-corp/tools#12 to 'in progress' yourself: https://gitlab\\.example\\.com/acme-corp/tools/-/issues/12$`, 'm'));
+    assert.deepEqual(res.calls, [], 'refused before any request');
+  }
+  const unlisted = run(policyInstall('Blocked'), ['transition', '--task', '#12', '--to', 'Blocked'], []);
+  assertPolicyRefused(unlisted, /Blocked is person-only by /);
+  assert.doesNotMatch(unlisted.r.stderr, /lists .* as open to an agent/, 'Blocked is no agent status, so no list is overridden');
+});
+
+test('policy: a move out of a person-only status is refused, even from a review status', () => {
+  const dir = policyInstall('Review');
+  const res = run(dir, ['transition', '--task', '#12', '--to', 'In Progress', '--dry-run'], [get(`${P}/issues/12`, issue(12, { labels: ['review', 'backend'] }))]);
+  assertPolicyRefused(res, new RegExp(`^refused: policy: moving acme-corp/tools#12 out of its status is a person's move — Review is person-only by ${BY} — move acme-corp/tools#12 to 'In Progress' yourself: `, 'm'));
+  assert.doesNotMatch(res.r.stderr, /from review on only a person moves it/, 'the policy speaks first');
+});
+
+test('policy: a move that touches no person-only status is unchanged, and a project adds to the defaults', () => {
+  const routes = [get(`${P}/issues/12`, issue(12, { labels: ['To Do', 'backend'] })), LABELS];
+  const dir = policyInstall('Review');
+  const dry = run(dir, ['transition', '--task', '#12', '--to', 'in progress', '--dry-run'], routes);
+  assert.equal(dry.r.status, 0, dry.r.output);
+  assert.match(dry.r.stdout, /^Would move: To Do → In Progress {3}\(source: labels, GITLAB_AGENT_STATUSES\)$/m);
+  onlyGets(dry.calls);
+  const added = policyInstall('Review', { projects: '    projects:\n      acme-corp/tools:\n        policy: { person_only: [To Do] }\n' });
+  assertPolicyRefused(run(added, ['transition', '--task', '#12', '--to', 'in progress', '--dry-run'], routes),
+    /out of its status is a person's move — To Do is person-only by task-tracking\.gitlab-issues\.projects\.acme-corp\/tools\.policy/);
+  const other = policyInstall('Review', { projects: '    projects:\n      acme-corp/site:\n        policy: { person_only: [To Do] }\n' });
+  assert.equal(run(other, ['transition', '--task', '#12', '--to', 'in progress', '--dry-run'], routes).r.status, 0);
+});
+
+test('policy: create and edit do not move a person-only status through its label', () => {
+  const dir = policyInstall('Review');
+  assertPolicyRefused(run(dir, ['create', '--summary', 'X', '--labels', 'Review', '--dry-run'], []), /^refused: policy: creating this issue in acme-corp\/tools with a status label is a person's move — Review is person-only/m);
+  const issues = [get(`${P}/issues/1`, issue(1, { labels: ['Review'] }))];
+  assertPolicyRefused(run(dir, ['edit', '--task', '#1', '--remove-labels', 'review', '--dry-run'], [...issues, LABELS]), /^refused: policy: changing these labels of acme-corp\/tools#1 is a person's move — Review is person-only/m);
+  assertPolicyRefused(run(dir, ['edit', '--task', '#1', '--labels', 'backend'], [...issues, LABELS]), /Review is person-only/);
+  assertPolicyRefused(run(dir, ['edit', '--task', '#2', '--add-labels', 'Review'], [get(`${P}/issues/2`, issue(2)), LABELS]), /Review is person-only/);
+  const fine = run(dir, ['edit', '--task', '#2', '--add-labels', 'backend', '--dry-run'], [get(`${P}/issues/2`, issue(2)), LABELS]);
+  assert.equal(fine.r.status, 0, fine.r.output);
+  onlyGets(fine.calls);
+});
+
+test('policy: a malformed part is a usage error naming its path, before any request', () => {
+  const dir = installation((t) => `${t.replace('task-tracking: [jira]', 'task-tracking: [gitlab-issues]').replace('settings:', 'settings:\n  GITLAB_URL: https://gitlab.example.com').trimEnd()}
+task-tracking:
+  gitlab-issues:
+    defaults:
+      policy:
+        person_only: Review
+`);
+  const res = run(dir, ['transition', '--task', 'acme-corp/tools#12', '--to', 'In Progress', '--dry-run'], []);
+  assert.equal(res.r.status, 1, res.r.output);
+  assert.match(res.r.stderr, /task-tracking\.gitlab-issues\.defaults\.policy\.person_only: must be a list/);
+  assert.deepEqual(res.calls, []);
+});
+
+// == label text goes through the content check (ADR 0003, D-OUT-LABELS) ==
+
+test('a flagged label is refused without --allow-flagged — create and edit, dry run and real run', () => {
+  const dir = gitlabInstall();
+  const dry = run(dir, ['create', '--summary', 'X', '--labels', 'oikos', '--create-labels', '--dry-run'], [LABELS]);
+  assert.equal(dry.r.status, 3, dry.r.output);
+  assert.match(dry.r.stderr, /^flagged: content check: assistant/m);
+  assert.match(dry.r.stdout, /labels line 1: assistant/);
+  const real = run(dir, ['create', '--summary', 'X', '--labels', 'oikos', '--create-labels'], []);
+  assert.equal(real.r.status, 3, real.r.output);
+  assert.match(real.r.stderr, /^refused: content check: assistant/m);
+  assert.deepEqual(real.calls, [], 'refused before any request');
+  const edit = run(dir, ['edit', '--task', '#1', '--add-labels', 'oikos', '--create-labels'], []);
+  assert.equal(edit.r.status, 3, edit.r.output);
+  assert.match(edit.r.stderr, /^refused: content check: assistant[\s\S]*add-labels line 1/m);
+  assert.deepEqual(edit.calls, []);
+  const allowed = run(dir, ['create', '--summary', 'X', '--labels', 'oikos', '--create-labels', '--dry-run', '--allow-flagged'], [LABELS]);
+  assert.equal(allowed.r.status, 0, allowed.r.output);
+  assert.match(allowed.r.stdout, /labels line 1: assistant — .* \(overridden\)/);
+});
+
 // == move-to-sprint: milestones and iterations ==
 
 test('move-to-sprint sets milestone_id; --backlog sets 0; dry run GET only', () => {

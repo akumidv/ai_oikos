@@ -328,23 +328,23 @@ test('create: unknown labels are refused, --create-labels creates them first; th
   const dir = installation(withIssues());
   const routes = [
     repo(), labelsRoute('bug'), { url: `${API}/user`, body: { login: 'ada' } }, issueRoute(1),
-    { method: 'POST', url: `${API}/repos/acme-corp/tools/labels`, status: 201, body: { name: 'oikos' } },
+    { method: 'POST', url: `${API}/repos/acme-corp/tools/labels`, status: 201, body: { name: 'export' } },
     { method: 'POST', url: `${API}/repos/acme-corp/tools/issues`, status: 201, body: issue(77) },
     { method: 'POST', url: `${API}/repos/acme-corp/tools/issues/1/sub_issues`, status: 201, body: {} },
   ];
-  const args = ['create', '--summary', 'Add the export', '--description', 'Ask @bob first.', '--labels', 'BUG,oikos', '--assignee', 'me', '--parent', '#1'];
-  assertRefused(run(dir, routes, [...args, '--dry-run']), /unknown label\(s\) in acme-corp\/tools: oikos .* --create-labels/);
+  const args = ['create', '--summary', 'Add the export', '--description', 'Ask @bob first.', '--labels', 'BUG,export', '--assignee', 'me', '--parent', '#1'];
+  assertRefused(run(dir, routes, [...args, '--dry-run']), /unknown label\(s\) in acme-corp\/tools: export .* --create-labels/);
   const dry = run(dir, routes, [...args, '--create-labels', '--dry-run']);
   assertDryRun(dry);
-  assert.match(dry.stdout, /^ {2}labels: bug, oikos {2}\(creates label\(s\) oikos first — --create-labels\)$/m);
+  assert.match(dry.stdout, /^ {2}labels: bug, export {2}\(creates label\(s\) export first — --create-labels\)$/m);
   assert.match(dry.stdout, /^ {2}assignees: @ada$/m);
   assert.match(dry.stdout, /then as a sub-issue of acme-corp\/tools#1 — Issue 1/);
   assert.match(dry.stdout, /^will notify @bob$/m);
   const write = run(dir, routes, [...args, '--create-labels']);
   assert.equal(write.status, 0, write.output);
   assert.deepEqual(writesOf(write.calls), [
-    { method: 'POST', url: `${API}/repos/acme-corp/tools/labels`, body: { name: 'oikos' } },
-    { method: 'POST', url: `${API}/repos/acme-corp/tools/issues`, body: { title: 'Add the export', body: 'Ask @bob first.', labels: ['bug', 'oikos'], assignees: ['ada'] } },
+    { method: 'POST', url: `${API}/repos/acme-corp/tools/labels`, body: { name: 'export' } },
+    { method: 'POST', url: `${API}/repos/acme-corp/tools/issues`, body: { title: 'Add the export', body: 'Ask @bob first.', labels: ['bug', 'export'], assignees: ['ada'] } },
     { method: 'POST', url: `${API}/repos/acme-corp/tools/issues/1/sub_issues`, body: { sub_issue_id: 1077 } },
   ]);
   assert.match(write.stdout, /^Created acme-corp\/tools#77 \(sub-issue of acme-corp\/tools#1\)/m);
@@ -388,6 +388,120 @@ test('edit: --max caps a query, status labels and --state are refused, the write
     { method: 'POST', url: `${API}/repos/acme-corp/tools/issues/13/labels`, body: { labels: ['new'] } },
   ]);
   assert.match(write.stdout, /^2\/2 edited$/m);
+});
+
+// == the organization's policy (ADR 0004, D-POLICY-HOSTS) =======================================
+
+const KB = 'https://kb.example.com/tracker-rules';
+/** `withIssues` plus a `task-tracking.github-issues` part: `personOnly` as the defaults' policy, `projects` as written. */
+const withPolicy = (personOnly, { settings = {}, projects = '' } = {}) => (t) => `${withIssues(settings)(t).trimEnd()}
+task-tracking:
+  github-issues:
+    defaults:
+      policy:
+        person_only: [${personOnly}]
+        source: ${KB}
+${projects}`;
+const ISSUE_URL = 'https://github\\.com/acme-corp/tools/issues/12';
+const BY = `task-tracking\\.github-issues\\.defaults\\.policy \\(source: ${KB.replace(/\./g, '\\.')}\\)`;
+
+function assertPolicyRefused(r, pattern) {
+  assert.equal(r.status, 3, r.output);
+  assert.match(r.stderr, /^refused: policy: /m);
+  assert.match(r.stderr, pattern);
+  assert.deepEqual(writesOf(r.calls), [], 'a refusal writes nothing');
+}
+
+test('policy: a move into a person-only status is refused before any request, dry run and real run', () => {
+  const dir = installation(withPolicy('In Review'));
+  for (const args of [['--dry-run'], []]) {
+    const r = run(dir, [], ['transition', '--task', '#12', '--to', 'in review', ...args]);
+    assertPolicyRefused(r, new RegExp(`^refused: policy: moving acme-corp/tools#12 to 'in review' is a person's move — In Review is person-only by ${BY} — move acme-corp/tools#12 to 'in review' yourself: ${ISSUE_URL}$`, 'm'));
+    assert.doesNotMatch(r.stderr, /lists .* as open to an agent/, 'In Review is no agent status, so no list is overridden');
+    assert.deepEqual(r.calls, [], 'refused before any request');
+  }
+});
+
+test('policy: a status the agent list opens but the policy names names the list it overrides', () => {
+  const dir = installation(withPolicy('in progress'));
+  const r = run(dir, [], ['transition', '--task', '#12', '--to', 'In Progress']);
+  assertPolicyRefused(r, new RegExp(`in progress is person-only by ${BY}; GITHUB_AGENT_STATUSES lists in progress as open to an agent \\(mode agent\\), which the policy overrides`));
+  assert.deepEqual(r.calls, []);
+});
+
+test('policy: a move out of a person-only status is refused, by label and by the project Status field', () => {
+  const labels = installation(withPolicy('In Review'));
+  const out = run(labels, [repo(), issueRoute(12, { labels: [{ name: 'In Review' }] })], ['transition', '--task', '#12', '--to', 'Todo', '--dry-run']);
+  assertPolicyRefused(out, new RegExp(`^refused: policy: moving acme-corp/tools#12 out of its status is a person's move — In Review is person-only by ${BY} — move acme-corp/tools#12 to 'Todo' yourself: ${ISSUE_URL}$`, 'm'));
+  assert.doesNotMatch(out.stderr, /not a status open to an agent/, 'the policy speaks first');
+  const unlisted = run(labels, [repo(), issueRoute(12, { labels: [{ name: 'In Review' }] }), labelsRoute('Todo')], ['transition', '--task', '#12', '--to', 'Todo']);
+  assertPolicyRefused(unlisted, /In Review is person-only/);
+  const project = installation(withPolicy('In Review', { settings: { GITHUB_PROJECT: 3 } }));
+  const field = run(project, [repo(), issueRoute(12), PROJECT, itemsRoute(12, [statusValue('In Review')])], ['transition', '--task', '#12', '--to', 'Todo', '--dry-run']);
+  assertPolicyRefused(field, /^refused: policy: moving acme-corp\/tools#12 out of its status is a person's move — In Review is person-only/m);
+});
+
+test('policy: a move that touches no person-only status is unchanged, and a project adds to the defaults', () => {
+  const routes = [
+    repo(), issueRoute(12, { labels: [{ name: 'todo' }, { name: 'bug' }] }), labelsRoute('Todo', 'In Progress', 'In Review', 'bug'),
+    { method: 'POST', url: `${API}/repos/acme-corp/tools/issues/12/labels`, body: [] },
+    { method: 'DELETE', url: `${API}/repos/acme-corp/tools/issues/12/labels/todo`, body: [] },
+  ];
+  const dir = installation(withPolicy('In Review'));
+  const dry = run(dir, routes, ['transition', '--task', '#12', '--to', 'in progress', '--dry-run']);
+  assertDryRun(dry);
+  assert.match(dry.stdout, /^Would move: todo → In Progress$/m);
+  assert.equal(run(dir, routes, ['transition', '--task', '#12', '--to', 'in progress']).status, 0);
+  const projects = '    projects:\n      acme-corp/tools:\n        policy: { person_only: [Todo] }\n';
+  const added = installation(withPolicy('In Review', { projects }));
+  assertPolicyRefused(run(added, routes, ['transition', '--task', '#12', '--to', 'in progress', '--dry-run']),
+    /out of its status is a person's move — Todo is person-only by task-tracking\.github-issues\.projects\.acme-corp\/tools\.policy/);
+  const other = installation(withPolicy('In Review', { projects: '    projects:\n      acme-corp/site:\n        policy: { person_only: [Todo] }\n' }));
+  assertDryRun(run(other, routes, ['transition', '--task', '#12', '--to', 'in progress', '--dry-run']));
+});
+
+test('policy: create and edit do not set a person-only status through --status or a label', () => {
+  const dir = installation(withPolicy('Review'));
+  assertPolicyRefused(run(dir, [], ['create', '--summary', 'X', '--labels', 'review', '--dry-run']), /^refused: policy: creating this issue in acme-corp\/tools is a person's move — Review is person-only/m);
+  const project = installation(withPolicy('Done', { settings: { GITHUB_PROJECT: 3 } }));
+  assertPolicyRefused(run(project, [], ['create', '--summary', 'X', '--add-to-project', '--status', 'Done', '--dry-run']), /Done is person-only/);
+  const added = run(dir, [repo(), labelsRoute('Review'), issueRoute(12)], ['edit', '--task', '#12', '--add-labels', 'Review', '--dry-run']);
+  assertPolicyRefused(added, /^refused: policy: changing these labels of acme-corp\/tools#12 is a person's move — Review is person-only/m);
+  const set = run(dir, [repo(), labelsRoute('Review', 'bug'), issueRoute(12, { labels: [{ name: 'Review' }] })], ['edit', '--task', '#12', '--labels', 'bug']);
+  assertPolicyRefused(set, /Review is person-only/);
+  const fine = run(dir, [repo(), labelsRoute('bug'), issueRoute(12)], ['edit', '--task', '#12', '--add-labels', 'bug', '--dry-run']);
+  assertDryRun(fine);
+});
+
+test('policy: a malformed part is a usage error naming its path, before any request', () => {
+  const dir = installation((t) => withPolicy('In Review')(t).replace('person_only: [In Review]', 'person_only: In Review'));
+  const r = run(dir, [], ['transition', '--task', '#12', '--to', 'Todo', '--dry-run']);
+  assert.equal(r.status, 1, r.output);
+  assert.match(r.stderr, /task-tracking\.github-issues\.defaults\.policy\.person_only: must be a list/);
+  assert.deepEqual(r.calls, []);
+});
+
+// == label text goes through the content check (ADR 0003, D-OUT-LABELS) ==========================
+
+test('a flagged label is refused without --allow-flagged — create and edit, dry run and real run', () => {
+  const dir = installation(withIssues());
+  const routes = [repo(), labelsRoute('oikos', 'bug'), issueRoute(12)];
+  const dry = run(dir, routes, ['create', '--summary', 'X', '--labels', 'oikos', '--dry-run']);
+  assert.equal(dry.status, 3, dry.output);
+  assert.match(dry.stderr, /^flagged: content check: assistant/m);
+  assert.match(dry.stdout, /labels line 1: assistant/);
+  const real = run(dir, [], ['create', '--summary', 'X', '--labels', 'oikos']);
+  assert.equal(real.status, 3, real.output);
+  assert.match(real.stderr, /^refused: content check: assistant/m);
+  assert.deepEqual(real.calls, [], 'refused before any request');
+  const edit = run(dir, [], ['edit', '--task', '#12', '--add-labels', 'oikos']);
+  assert.equal(edit.status, 3, edit.output);
+  assert.match(edit.stderr, /^refused: content check: assistant[\s\S]*add-labels line 1/m);
+  const created = run(dir, [repo(), labelsRoute('bug')], ['create', '--summary', 'X', '--labels', 'oikos', '--create-labels', '--dry-run', '--allow-flagged']);
+  assertDryRun(created);
+  assert.match(created.stdout, /labels line 1: assistant — .* \(overridden\)/);
+  const set = run(dir, [], ['edit', '--task', '#12', '--labels', 'oikos']);
+  assert.match(set.stderr, /^refused: content check: assistant/m);
 });
 
 // == move-to-sprint =============================================================================
