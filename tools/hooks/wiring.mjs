@@ -16,6 +16,15 @@ import { join } from 'node:path';
 export const HOOK_ENTRY = 'tools/hooks/host-hook.mjs';
 
 /**
+ * The `timeout`, in seconds, written on every wired hook command — the field name and unit are the same
+ * in Claude Code and Qwen Code (Qwen reads a value of 1000 or more as the older milliseconds). A host lets
+ * the action through when a hook runs past it, so the dispatcher must answer first: its own deadline,
+ * `DEADLINE_MS` in tools/hooks/host-hook.mjs (20 s), is well under this 30 s, and past it the dispatcher
+ * kills the guard and decides by its fallback rules.
+ */
+export const HOOK_TIMEOUT_SECONDS = 30;
+
+/**
  * Each wiring: a guard, the event it listens to, and the matcher group of that event.
  * Order here is the order in the generated files.
  */
@@ -37,9 +46,14 @@ export const WIRING = [
 const CHROME_READS = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'];
 const CHROME_READ_RULES = CHROME_READS.map((t) => `mcp__chrome-devtools__${t}`);
 
+// `dir`: the host's folder in a project; `userDir`: its folder under the user's home, where the
+// user-level settings live (`userDirVar`: the environment variable that moves that folder, when the
+// host has one).
 export const HOSTS = {
   claude: {
     dir: '.claude',
+    userDir: '.claude',
+    userDirVar: 'CLAUDE_CONFIG_DIR',
     var: 'CLAUDE_PROJECT_DIR',
     seed: { enableAllProjectMcpServers: true, permissions: { allow: CHROME_READ_RULES } },
     matchers: {
@@ -51,6 +65,7 @@ export const HOSTS = {
   },
   qwen: {
     dir: '.qwen',
+    userDir: '.qwen',
     var: 'QWEN_PROJECT_DIR',
     seed: { permissions: { allow: CHROME_READ_RULES } },
     matchers: {
@@ -132,7 +147,7 @@ export function hooksFor(host, base = '') {
   return out;
 }
 
-const command = (host, guard, base) => ({ type: 'command', command: hookCommand(host, guard, base) });
+const command = (host, guard, base) => ({ type: 'command', command: hookCommand(host, guard, base), timeout: HOOK_TIMEOUT_SECONDS });
 
 /** The guard a wired command names: the dispatcher's argument, or an older hook file's name. */
 function guardOf(command) {

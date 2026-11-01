@@ -82,9 +82,11 @@ test('a wrapper does not hide the landing ask or the staging rule: timeout, nice
   for (const command of [
     'timeout 60 git push', 'timeout -s KILL 60 git push', 'nice git push', 'nice -n 5 git push', 'ionice -c 3 git push', 'command -p git push', 'env -S "git push"',
     'xargs git push', 'setsid git push', 'stdbuf -oL git push', 'flock /tmp/x git push', 'time -p git push', 'timeout 5 nice env X=1 git push',
+    'strace -f -o /dev/null git push', 'ltrace git push', 'setarch x86_64 git push', 'setarch x86_64 -R git push', 'unshare -r git push', 'prlimit --nofile=100 git push',
+    'nsenter -t 1 -m git push', 'firejail --net=none git push', 'systemd-run --user -p MemoryMax=1G git push',
   ]) assert.equal(guard(command), 'ask', command);
-  for (const command of ['timeout 30 git add -A', 'nice git add .', 'env -S "git commit -a -m x"', 'xargs git add --all']) assert.equal(guard(command), 'deny', command);
-  for (const command of ['timeout 5 npm test', 'nice rg x', 'timeout 30 git status', 'command -v git', 'xargs echo']) assert.equal(guard(command), null, command);
+  for (const command of ['timeout 30 git add -A', 'nice git add .', 'env -S "git commit -a -m x"', 'xargs git add --all', 'strace -f git add -A', 'setarch x86_64 git commit -a -m x', 'unshare -r git add --all']) assert.equal(guard(command), 'deny', command);
+  for (const command of ['timeout 5 npm test', 'nice rg x', 'timeout 30 git status', 'command -v git', 'xargs echo', 'strace -f git status', 'setarch x86_64 git add file.txt', 'strace -o /dev/null ls']) assert.equal(guard(command), null, command);
   assert.equal(guard('timeout 60 git push', 'auto'), 'deny', 'outside the default mode the ask is a deny');
 });
 

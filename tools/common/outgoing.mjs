@@ -30,6 +30,51 @@ export const MIN_ALLOW_LENGTH = 8;
 export const CATEGORIES = Object.freeze(['language', 'assistant', 'path', 'secret', 'term', 'executable']);
 
 /**
+ * The start of a remote address: `http:` or `https:` with any slashes after it, or a scheme-relative `//` —
+ * a browser reads a backslash in such a URL as a slash (`https:\\host`, `https:/\host`, `\\host`).
+ */
+const REMOTE = String.raw`(?:https?:[/\\]*|[/\\]{2})`;
+/** The elements whose attributes fetch (an anchor's `href` is a link, not a fetch, and is not here). */
+const FETCHING_TAGS = 'img|video|audio|source|embed|object|link|input|track|image|feimage|use|frame|table|thead|tbody|tfoot|tr|td|th|body|form|button';
+const FETCHING_ATTRIBUTES = 'src|href|data|poster|background|formaction|action';
+
+/** `text` with its CSS escapes decoded (`\75 rl` is `url`), and for each decoded character the index it started at in `text`. */
+function decodeCssEscapes(text) {
+  let decoded = '';
+  const starts = [];
+  const escape = /\\(?:([0-9a-f]{1,6})[ \t\n\f]?|([^\n]))/gi;
+  let from = 0;
+  const push = (chunk, at) => { for (let i = 0; i < chunk.length; i++) starts.push(at + i); decoded += chunk; };
+  for (const m of text.matchAll(escape)) {
+    push(text.slice(from, m.index), from);
+    const code = m[1] ? parseInt(m[1], 16) : 0;
+    const valid = m[1] && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff);
+    push(m[1] ? (valid ? String.fromCodePoint(code) : '�') : m[2], m.index);
+    from = m.index + m[0].length;
+  }
+  push(text.slice(from), from);
+  return { decoded, starts };
+}
+
+const CSS_FETCHES = [
+  new RegExp(String.raw`\burl\(\s*["']?\s*${REMOTE}`, 'i'),
+  new RegExp(String.raw`\bimage-set\(\s*["']?\s*${REMOTE}`, 'i'),
+  new RegExp(String.raw`@import\s+["']?\s*${REMOTE}`, 'i'),
+];
+
+/** The indexes in `text` of CSS that fetches a remote address, read as written and with its CSS escapes decoded. */
+function remoteCss(text) {
+  const { decoded, starts } = decodeCssEscapes(text);
+  const found = new Set();
+  for (const pattern of CSS_FETCHES) {
+    const global = new RegExp(pattern.source, 'gi');
+    for (const m of text.matchAll(global)) found.add(m.index);
+    for (const m of decoded.matchAll(global)) found.add(starts[m.index]);
+  }
+  return [...found];
+}
+
+/**
  * The kinds of executable or fetching content a note may carry that Obsidian runs or fetches outside every
  * guard, each with what shows it (ADR 0007 D04, D-A9-NOTE-EXEC). A kind a vault's `wiki.rules` allows is
  * left out of `rules.refuse`; an `allow:` entry of `.local/outgoing.yaml` does not lift it. A pattern is
@@ -44,27 +89,56 @@ export const EXECUTABLE_KINDS = Object.freeze({
   iframe: [/<\s*iframe\b/i],
   'remote-embed': [
     // ![alt](https://…) and ![[https://…]]
-    /!\[[^\]]*\]\(\s*<?\s*(?:https?:)?\/\//i,
-    /!\[\[\s*(?:https?:)?\/\//i,
-    // an element that fetches: its src, href, data or poster is a remote address
-    /<\s*(?:img|video|audio|source|embed|object|link|input|track|image|use|frame)\b[^>]*?\b(?:src|href|data|poster)\s*=\s*["']?\s*(?:https?:)?\/\//i,
+    new RegExp(String.raw`!\[[^\]]*\]\(\s*<?\s*${REMOTE}`, 'i'),
+    new RegExp(String.raw`!\[\[\s*${REMOTE}`, 'i'),
+    // an element that fetches: its src, href, data, poster, background or action is a remote address
+    new RegExp(String.raw`<\s*(?:${FETCHING_TAGS})\b[^>]*?\b(?:${FETCHING_ATTRIBUTES})\s*=\s*["']?\s*${REMOTE}`, 'i'),
     // srcset: a list of `address descriptor` entries, any of them remote
-    /<\s*(?:img|source|link)\b[^>]*?\b(?:image)?srcset\s*=\s*["']?(?:[^"'>,]*,)*\s*(?:https?:)?\/\//i,
-    // CSS that fetches: url(), image-set(), @import
-    /\burl\(\s*["']?\s*(?:https?:)?\/\//i,
-    /\bimage-set\(\s*["']?\s*(?:https?:)?\/\//i,
-    /@import\s+["']?\s*(?:https?:)?\/\//i,
+    new RegExp(String.raw`<\s*(?:img|source|link)\b[^>]*?\b(?:image)?srcset\s*=\s*["']?(?:[^"'>,]*,)*\s*${REMOTE}`, 'i'),
+    // CSS that fetches: url(), image-set(), @import — also with the escapes CSS allows in a name (`\75 rl(`)
+    remoteCss,
     // ![alt][ref], ![ref][] or ![ref], whose definition `[ref]: https://…` is remote
     remoteReferenceImages,
+    // an address a browser reads as remote after dropping the tab and line breaks it ignores inside a URL
+    remoteAcrossBreaks,
   ],
 });
+
+const STARTS_REMOTE = new RegExp(String.raw`^\s*<?\s*${REMOTE}`, 'i');
+const FETCHING_TAG = new RegExp(String.raw`<\s*(?:${FETCHING_TAGS})\b[^>]*>`, 'gi');
+const FETCHING_VALUE = new RegExp(String.raw`\b(?:${FETCHING_ATTRIBUTES})\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`, 'gi');
+const MARKDOWN_TARGETS = [/!\[[^\]]*\]\(([^)]{0,200})/g, /!\[\[([^\]]{0,200})/g];
+
+/** Whether the address `value` is remote once a browser has dropped the tab and line breaks it ignores inside a URL. */
+const remoteWithoutBreaks = (value) => STARTS_REMOTE.test(value.replace(/[\t\n\r]/g, ''));
+
+/**
+ * The indexes in `raw` of an element or a Markdown image whose address is remote only once the ASCII tab,
+ * LF and CR inside it are removed (`ht<TAB>tps://…`, `/<TAB>/host`, a line break inside the value) — which a
+ * browser does and the other patterns, matching blanks as one space, do not see. `raw` is the text with its
+ * blanks kept; the index is that of the element or image, so its line is the one it starts on.
+ */
+function remoteAcrossBreaks(raw) {
+  const found = [];
+  for (const tag of raw.matchAll(FETCHING_TAG)) {
+    for (const m of tag[0].matchAll(FETCHING_VALUE)) {
+      if (remoteWithoutBreaks(m[1] ?? m[2] ?? m[3])) found.push(tag.index);
+    }
+  }
+  for (const pattern of MARKDOWN_TARGETS) {
+    for (const m of raw.matchAll(pattern)) if (remoteWithoutBreaks(m[1])) found.push(m.index);
+  }
+  return found;
+}
+/** Runs on the text with its blanks kept, not on the views that collapse them. */
+remoteAcrossBreaks.raw = true;
 
 /** The label of a reference as Markdown compares it: blanks collapsed, ignoring case. */
 const referenceLabel = (label) => label.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /** The indexes of the images in `text` that use a reference whose definition (`[ref]: address`) is remote. */
 function remoteReferenceImages(text) {
-  const remote = new Set([...text.matchAll(/^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*\n?[ \t]*<?\s*(?:https?:)?\/\//gim)].map((m) => referenceLabel(m[1])));
+  const remote = new Set([...text.matchAll(/^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*\n?[ \t]*<?\s*(?:https?:[/\\]*|[/\\]{2})/gim)].map((m) => referenceLabel(m[1])));
   if (!remote.size) return [];
   return [...text.matchAll(/!\[([^[\]]*)\](?:\[([^[\]]*)\])?(?!\()/g)]
     .filter((m) => remote.has(referenceLabel(m[2] || m[1])))
@@ -256,6 +330,12 @@ function threeViews(line) {
   return [plain, marked, marked.replace(/_/g, '')];
 }
 
+// The entities of the characters a browser drops from inside a URL (tab, LF, CR): `&#9;`, `&#x0A;`, `&Tab;`, `&NewLine;`.
+const URL_BREAK_ENTITIES = /&(?:#0*(?:9|10|13)(?![0-9])|#x0*(?:9|a|d)(?![0-9a-f])|tab(?![a-z0-9])|newline(?![a-z0-9]));?/gi;
+
+/** One line with its blanks kept (tab, CR): NFKC, entities decoded (those of a tab or line break dropped, as the browser drops them from a URL), invisible characters removed. */
+const rawLine = (line) => decodeEntities(line.normalize('NFKC').replace(URL_BREAK_ENTITIES, '')).normalize('NFKC').replace(INVISIBLE, '');
+
 /**
  * What the check sees of one line, as {@link threeViews} makes it, each different one once. Every view is
  * matched. Pure.
@@ -356,19 +436,21 @@ export function outgoingFindings(text, rules) {
 
 /**
  * The `executable` findings of `lines`: each refused kind whose pattern matches the whole text — in any of its
- * three views, which have the lines of the text — reported on the line its match starts on, the first kind
+ * three views, which have the lines of the text, and for a pattern marked `.raw` the text with its blanks kept — reported on the line its match starts on, the first kind
  * (in the order of `rules.refuse`) once per line. No `allow:` entry lifts one.
  */
 function executableFindings(lines, rules) {
   if (!activeCategories(rules).includes('executable')) return [];
   const perLine = lines.map(threeViews);
-  const wholes = [0, 1, 2].map((v) => perLine.map((views) => views[v]).join('\n'));
+  const wholes = [0, 1, 2].map((v) => ({ raw: false, text: perLine.map((views) => views[v]).join('\n') }));
+  wholes.push({ raw: true, text: lines.map(rawLine).join('\n') }); // blanks kept: for the patterns that are marked `.raw`
   const kindsOnLine = new Map();
   for (const kind of rules.refuse) {
     for (const pattern of EXECUTABLE_KINDS[kind] ?? []) {
-      for (const whole of wholes) {
-        for (const index of matchIndexes(pattern, whole)) {
-          const line = whole.slice(0, index).split('\n').length;
+      for (const { raw, text } of wholes) {
+        if (Boolean(pattern.raw) !== raw) continue;
+        for (const index of matchIndexes(pattern, text)) {
+          const line = text.slice(0, index).split('\n').length;
           kindsOnLine.set(line, [...(kindsOnLine.get(line) ?? []), kind]);
         }
       }
@@ -523,13 +605,19 @@ export function checkLines(check, values = {}) {
   return lines;
 }
 
-/** What a refusal tells the person to do about the open findings: a secret is never posted, anything else needs the user's agreement (a flag, or for a command without one an `allow:` line). */
+/** What a refusal tells the person to do about the open findings: a secret is never posted, anything else needs the user's agreement (a flag, or for a command without one an `allow:` line; for executable content, which no `allow:` line lifts, the vault's own note rules). */
 function adviceFor(open, flags) {
   if (open.some(({ finding }) => finding.category === 'secret')) {
     return `fix the text — a secret is never posted; an allow: entry holding it in ${OUTGOING_FILE} if it is not one`;
   }
-  const way = flags ? ', or add --allow-flagged to the command once the user has seen the findings and agrees'
-    : `, or have the user add an allow: line for it to ${OUTGOING_FILE}, which they edit themselves`;
+  const executable = open.some(({ finding }) => finding.category === 'executable');
+  const others = open.some(({ finding }) => finding.category !== 'executable');
+  const allowLine = `have the user add an allow: line for it to ${OUTGOING_FILE}, which they edit themselves`;
+  // No allow: entry lifts an executable finding (L1): only the vault's note rules do.
+  const vaultRules = 'the vault\'s note rules (`wiki.rules` front matter `allow:`) are the only way to allow executable content';
+  let way = `, or ${allowLine}`;
+  if (flags) way = ', or add --allow-flagged to the command once the user has seen the findings and agrees';
+  else if (executable) way = others ? `; for the other findings ${allowLine}; ${vaultRules}` : ` — ${vaultRules}`;
   return `fix the text${way}${flags && open.every(({ finding }) => finding.category === 'language') ? ' (or --allow-non-english)' : ''}`;
 }
 

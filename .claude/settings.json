@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" session-start"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" session-start",
+            "timeout": 30
           }
         ]
       },
@@ -28,11 +29,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" write-guard"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" write-guard",
+            "timeout": 30
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" context-pressure"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" context-pressure",
+            "timeout": 30
           }
         ]
       },
@@ -51,15 +54,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" write-guard"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" write-guard",
+            "timeout": 30
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" git-guard"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" git-guard",
+            "timeout": 30
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" secret-guard"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" secret-guard",
+            "timeout": 30
           }
         ]
       },
@@ -68,11 +74,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" secret-guard"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" secret-guard",
+            "timeout": 30
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" package-guard"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" package-guard",
+            "timeout": 30
           }
         ]
       },
@@ -81,7 +89,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" context-pressure"
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" context-pressure",
+            "timeout": 30
           }
         ]
       },

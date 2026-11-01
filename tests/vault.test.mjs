@@ -316,6 +316,44 @@ test('executable or fetching content is refused unless wiki.rules allows that ki
   refusedWith(vault(dir, 'create', '--title', 'Tag', '--wiki', 'team', '--text', '<% x %>'), 'executable');
 });
 
+test('remote embeds in backslash, attribute and CSS-escape spellings are refused; a link and a local image are not (L-d)', () => {
+  const { dir } = fixture();
+  const create = (body) => vault(dir, 'create', '--title', 'Embed', '--wiki', 'team', '--text', body);
+  for (const body of [
+    '<img src="https:\\\\evil.example\\p.png">',
+    '<img src="https:/\\evil.example/p.png">',
+    '![a](https:\\\\evil.example/p.png)',
+    '<table background="https://evil.example/p.png"><tr><td>x</td></tr></table>',
+    '<div style="background:\\75 rl(https://evil.example/p.png)">x</div>',
+    '<img src="ht\ttps://evil.example/p.png">', // a browser drops the tab, LF and CR inside a URL (L4)
+    '<img src="h\nttps://evil.example/p.png">',
+    '<img src="/\t/evil.example/p.png">',
+    '![a](ht\ttps://evil.example/p.png)',
+    '<svg><feImage href="https://evil.example/p.png"/></svg>',
+  ]) {
+    const r = create(body);
+    refusedWith(r, 'executable');
+    assert.match(r.stderr, /executable — remote-embed/, body);
+  }
+  assert.equal(create('a [link](https://example.com) and ![a](local.png)').status, 0);
+});
+
+test('the advice for an executable finding names wiki.rules, the only way; an allow: line is advised for other findings only (L-g)', () => {
+  const { dir } = fixture({ outgoing: 'terms: [Globex]\n' });
+  const create = (body) => vault(dir, 'create', '--title', 'Advice', '--wiki', 'team', '--text', body);
+  const executable = create('<script>alert(1)</script>');
+  refusedWith(executable, 'executable');
+  assert.match(executable.stderr, /wiki\.rules/);
+  assert.match(executable.stderr, /front matter `allow:`/);
+  assert.doesNotMatch(executable.stderr, /add an allow: line/);
+  const term = create('Globex');
+  refusedWith(term, 'term');
+  assert.match(term.stderr, /have the user add an allow: line/);
+  const both = create('<script>alert(1)</script>\nGlobex');
+  assert.match(both.stderr, /for the other findings have the user add an allow: line/);
+  assert.match(both.stderr, /wiki\.rules/);
+});
+
 test('a personal vault also keeps the organization\'s markers out: its email domain, its hosts, its task keys; a shared vault does not', () => {
   const { dir, team } = fixture({ change: ({ dir: d }) => reshape(join(d, 'oikos.yaml'), 'mounts:', 'task-tracking:\n  jira:\n    projects:\n      PROJ: {}\nmounts:') });
   assert.deepEqual(configOf(dir).problems, []);

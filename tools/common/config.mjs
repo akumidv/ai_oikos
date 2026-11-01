@@ -21,7 +21,7 @@ import YAML from 'yaml';
 import { installRoot, localPath, INSTALL_FILE } from './paths.mjs';
 import { taskTrackingProblems } from './transitions.mjs';
 import { deskProblems } from './desk.mjs';
-import { LOCAL_MOUNTS_FILE, resolveMounts, scanMountKeys } from './mounts.mjs';
+import { LOCAL_MOUNTS_FILE, declaredMountKeys, looseMountKeys, resolveMounts } from './mounts.mjs';
 
 /** The installation's `oikos.yaml`, or null outside an installation. */
 export const configFile = () => (installRoot() ? join(installRoot(), INSTALL_FILE) : null);
@@ -58,12 +58,25 @@ export function config() {
   let agents = [];
   if (isMap(raw.agents)) problems.push(`${INSTALL_FILE}: 'agents' must be a list of agent names`);
   else if (raw.agents !== undefined && raw.agents !== null) agents = (Array.isArray(raw.agents) ? raw.agents : String(raw.agents).split(',')).map((a) => String(a).trim()).filter(Boolean);
-  const { mounts, guarded } = mountsOf(part('mounts'), unread, problems);
+  const { mounts, guarded } = mountsOf(mountsPart(raw.mounts, INSTALL_FILE, 'shared', unread, problems), unread, problems);
   cached = {
     organization: part('organization'), connectors, settings: part('settings'), mcp_servers: part('mcp_servers'), brand: part('brand'),
     'task-tracking': taskTracking, agents: [...new Set(agents)], desk, mounts, guarded, problems,
   };
   return cached;
+}
+
+/**
+ * The `mounts:` mapping `value` of the file `label`, `{}` when there is none. A value that is no mapping
+ * (a list, a lone string) is a problem, and what it names — its string items and the keys of mappings in it —
+ * goes to `unread[layer]`, so those roots stay guarded (D01: a problem never opens a guard).
+ */
+function mountsPart(value, label, layer, unread, problems) {
+  if (value === undefined || value === null) return {}; // a key with only comments under it
+  if (isMap(value)) return value;
+  problems.push(`${label}: 'mounts' must be a mapping`);
+  unread[layer] = looseMountKeys(value);
+  return {};
 }
 
 /** The parsed `oikos.yaml`, `{}` when it is absent or does not parse (a problem said, and its `mounts:` keys scanned into `unread.shared`). */
@@ -76,7 +89,7 @@ function installFile(problems, unread) {
     return YAML.parse(text) || {};
   } catch (e) {
     problems.push(`${INSTALL_FILE} does not parse (${e.message.split('\n')[0]})`);
-    unread.shared = scanMountKeys(text);
+    unread.shared = declaredMountKeys(text);
     return {};
   }
 }
@@ -100,12 +113,10 @@ function localMounts(problems, unread) {
     const raw = YAML.parse(text) || {};
     if (!isMap(raw)) throw new Error('the top level must be a mapping with `mounts:`');
     for (const key of Object.keys(raw)) if (key !== 'mounts') problems.push(`${label}: unknown key '${key}' (mounts)`);
-    if (raw.mounts === undefined || raw.mounts === null) return {};
-    if (isMap(raw.mounts)) return raw.mounts;
-    problems.push(`${label}: 'mounts' must be a mapping`);
+    return mountsPart(raw.mounts, label, 'local', unread, problems);
   } catch (e) {
     problems.push(`${label} does not parse (${e.message.split('\n')[0]})`);
-    unread.local = scanMountKeys(text);
+    unread.local = declaredMountKeys(text);
   }
   return {};
 }

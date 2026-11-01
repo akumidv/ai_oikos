@@ -7,11 +7,13 @@
 // the network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { linkSync, mkdirSync, realpathSync, symlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { installation, tempDir } from './helpers/installation.mjs';
+import { cleanEnv, installation, tempDir } from './helpers/installation.mjs';
 import { hook, mounted, repository, write } from './helpers/mounts.mjs';
+import { STATE_DIR } from '../tools/hooks/common.mjs';
 
 const stranger = realpathSync(installation((t) => t));
 const friend = repository(realpathSync(installation((t) => t))); // a registered mount is a repository (D01)
@@ -439,7 +441,7 @@ test('a long command stays fast (a document written by a heredoc is one)', () =>
 // substitutions, `git grep --no-index`, `@file` and comma-joined values, git's code-running variables.
 const fromHome = (path) => relative(homedir(), path);
 
-test('a wrapper does not hide git: timeout, nice, ionice, stdbuf, setsid, flock, taskset, chrt, command, exec, time, env -S and xargs are stripped with their options', () => {
+test('a wrapper does not hide git: timeout, nice, ionice, stdbuf, setsid, flock, taskset, chrt, command, exec, time, env -S, xargs, strace, ltrace, setarch, unshare, prlimit, nsenter, firejail and systemd-run are stripped with their options', () => {
   const git = 'git -C vaults/team commit -m x';
   assertDenied([
     `timeout 30 ${git}`,
@@ -469,6 +471,18 @@ test('a wrapper does not hide git: timeout, nice, ionice, stdbuf, setsid, flock,
     `xargs -n 1 -I {} ${git}`,
     `timeout 5 nice -n 3 env X=1 ${git}`,
     `ls | xargs -0 ${git}`,
+    `strace -f ${git}`,
+    `strace -f -o /dev/null -e trace=file -s 100 ${git}`,
+    `ltrace -f ${git}`,
+    `setarch x86_64 ${git}`,
+    `setarch x86_64 -R ${git}`,
+    `unshare -r ${git}`,
+    `unshare -m --propagation private ${git}`,
+    `prlimit --nofile=100 ${git}`,
+    `nsenter -t 1 -m ${git}`,
+    `firejail --net=none ${git}`,
+    `systemd-run --user -p MemoryMax=1G ${git}`,
+    `strace -f setarch x86_64 unshare -r ${git}`,
   ], MOUNT);
   assertDenied(['timeout 5 bash -c "echo x > vaults/team/n.md"', 'nice sh -c "git -C vaults/team commit -m x"'], MOUNT);
 });
@@ -484,6 +498,11 @@ test('a wrapped command that is no write, and a wrapper with nothing to run, pas
     'timeout 5',
     'nice',
     'env -S "git status"',
+    'strace -f git status',
+    'strace -o /dev/null ls',
+    'setarch x86_64 git status',
+    'unshare -r git log',
+    'prlimit --nofile=100 git -C vaults/team log',
     'git log --oneline -3',
     'git status',
     'echo "$(date)"',
@@ -654,4 +673,492 @@ test('the variables and options that make git run a program count as a configura
     'git -C vaults/team config --list',
     'git -C vaults/team config user.name',
   ]);
+});
+
+// The re-audit round: an output option's value is a write target, the hook state folder, a variable as the
+// program, `~name`, brace groups and globs on the route of a write.
+const STATE = /oikos mount guard: .* writes into the hook state folder/;
+const HOME = /oikos mount guard: `.+` is a path in another user's home/;
+
+test('the file or folder a git call is told to write to (--output, -o, --output-directory, config --file) is judged like a redirection target', () => {
+  assertDenied([
+    'git diff --output=vaults/team/n.md',
+    'git log -1 --output=vaults/team/n.md',
+    'git show --output vaults/team/n.md HEAD',
+    'git format-patch --output-directory=vaults/team -1',
+    'git format-patch --output-directory vaults/team -1',
+    'git format-patch -ovaults/team -1',
+    'git format-patch -o vaults/team -1',
+    'git format-patch -o vaults -1',
+    'git archive --output=vaults/team/x.tar HEAD',
+    'git archive --output vaults/team/x.tar HEAD',
+    'git archive -o vaults/team/x.tar HEAD',
+    'git archive -ovaults/team/x.tar HEAD',
+    'git -C notes diff --output=../vaults/team/n.md',
+    'git diff --output=link-team/n.md',
+    `git diff --output=${own}/n.md`,
+    `git diff --output=$HOME/${fromHome(team)}/n.md`,
+    'git config --file vaults/team/x.cfg user.name x',
+    'git config -f vaults/team/x.cfg --add a.b c',
+    'git checkout-index --prefix=vaults/team/ -a',
+    'git init --separate-git-dir=vaults/team/g notes-new',
+    'git diff --output=vau*/team/n.md',
+    'V=vaults/team; git diff --output=$V/n.md',
+    `git diff --output=${STATE_DIR}/writes-x.json`,
+  ], new RegExp(`${MOUNT.source}|${STATE.source}`));
+  assertAllowed([
+    'git diff --output=out.md',
+    'git log -1 --output=notes/out.md',
+    'git format-patch -o patches -1',
+    'git format-patch -o notes -1',
+    'git archive --output=notes/x.tar HEAD',
+    'git archive --prefix=vaults/team/ -o notes/x.tar HEAD',
+    'git archive --prefix=vaults/team/ HEAD',
+    'git config --file notes/x.cfg --get a.b',
+    'git config --file notes/x.cfg a.b c',
+    'git diff --output-indicator-new=+ HEAD',
+    'git -C vaults/team diff HEAD',
+    'git diff --output=*.log',
+    'git commit -o notes/a.md -m x',
+  ]);
+});
+
+test('a redirection or a git output into the hook state folder is denied, whatever way the folder is spelled (it would forge a dry run)', () => {
+  mkdirSync(STATE_DIR, { recursive: true });
+  symlinkSync(tmpdir(), join(dir, 'link-tmp'), 'dir');
+  const state = join(STATE_DIR, 'writes-x.json');
+  assertDenied([
+    `echo '{}' > ${state}`,
+    `echo '{}' >> ${state}`,
+    `echo '{}' 2> ${state}`,
+    `echo '{}' > $TMPDIR/oikos-hooks/writes-x.json`,
+    `echo '{}' > "$TMPDIR/oikos-hooks/writes-x.json"`,
+    `echo '{}' > \${TMPDIR}/oikos-hooks/writes-x.json`,
+    `echo '{}' > ${tmpdir()}/../${tmpdir().split('/').pop()}/oikos-hooks/writes-x.json`,
+    `echo '{}' > ${tmpdir()}/./oikos-hooks/../oikos-hooks/writes-x.json`,
+    `echo '{}' > link-tmp/oikos-hooks/writes-x.json`,
+    `echo '{}' > ${STATE_DIR}/writes-*.json`,
+    `echo '{}' > ${tmpdir()}/oikos-h*/writes-x.json`,
+    `echo '{}' > ${tmpdir()}/{x,oikos-hooks}/writes-x.json`,
+    `cd ${STATE_DIR} && echo '{}' > writes-x.json`,
+    `D=${STATE_DIR}; echo '{}' > $D/writes-x.json`,
+    `bash -c "echo '{}' > ${state}"`,
+    `git diff --output=$TMPDIR/oikos-hooks/writes-x.json`,
+    `git format-patch -o link-tmp/oikos-hooks -1`,
+  ], STATE);
+  assertAllowed([
+    `echo x > ${tmpdir()}/oikos-hooks-not/writes-x.json`,
+    `echo x > $TMPDIR/other-file.json`,
+    `echo x > ${tmpdir()}/oikos-test-never-read.json`,
+    `cat ${state}`,
+    `cat $TMPDIR/oikos-hooks/writes-x.json`,
+    `TMPDIR=notes; echo x > $TMPDIR/oikos-hooks/writes-x.json`,
+  ]);
+});
+
+test('a variable the command sets stands for the program too: `G=git; $G -C vaults/team commit`', () => {
+  assertDenied([
+    'G=git; $G -C vaults/team commit -m x',
+    'G=git; ${G} -C vaults/team commit -m x',
+    'G=git; export H=1; $G -C vaults/team commit -m x',
+    "G='git -C vaults/team'; $G commit -m x",
+    'G="timeout 5 git"; $G -C vaults/team commit -m x',
+    'G=env; $G git -C vaults/team commit -m x',
+    'G=git; timeout 5 $G -C vaults/team commit -m x',
+    'G=ls; G=git; $G -C vaults/team commit -m x',
+    'S=bash; $S -c "echo x > vaults/team/n.md"',
+  ], MOUNT);
+  assertDenied(['S=grep; $S -r foo ..', 'S=rg; $S foo ..'], SCOPE);
+  assertAllowed(['G=git; $G status', 'G=git; $G -C vaults/team log', 'G=ls; $G -C vaults/team', '$G -C vaults/team commit -m x', 'G=echo; $G hi']);
+});
+
+test('a word that starts with `~name` is denied as unjudgeable, the file guard\'s rule: where a path stands for sure and as `~name/…` anywhere', () => {
+  assertDenied([
+    'cat ~root/x',
+    'echo x > ~root/n.md',
+    'echo x > ~root',
+    'echo x >> ~someone/n.md',
+    'cd ~root && ls',
+    'cd ~someone',
+    'git -C ~root commit -m x',
+    'git --git-dir=~root/.git add x',
+    'git --work-tree ~root add x',
+    'cat {~root,x}/y',
+    'cat {x,~root/y}',
+    'V=~root/x; cat $V',
+    'V=~root; cd $V',
+    'tool --file=~root/x',
+    'tool a,~root/x',
+    'ls ~root/..',
+    `echo x > ~${homedir().split('/').pop()}/n.md`,
+  ], HOME);
+  assertAllowed([
+    'cat ~/x',
+    'echo x > ~/.oikos-test-never-written',
+    'cd ~ && ls',
+    'cd ~/',
+    'git commit -m "~fix the thing"',
+    'echo ~',
+    'echo ~root',
+    'cat notes/~backup',
+  ]);
+});
+
+test('a brace group is expanded before a word is judged: `{..,.}/other/f`, `{notes,vaults/team}/n.md`', () => {
+  const ours = relative(dir, stranger);
+  assertDenied([`cat {${ours},x}/oikos.yaml`, `cat {x,${ours}}/oikos.yaml`, `cat {a,{${ours},b}}/oikos.yaml`, `cat {${stranger},x}/oikos.yaml`, `cd ${parent} && cat {${relative(parent, stranger)},x}/oikos.yaml`], OTHER);
+  assertDenied(['echo x > {notes,vaults/team}/n.md', 'echo x > {vaults,x}/team/n.md', 'echo x > vaults/{a,team}/n.md', 'git -C {notes,vaults/team} commit -m x', 'git rm -r {notes,vaults/team}', 'echo x > {x,}{vaults,y}/team/n.md'], MOUNT);
+  assertAllowed(['echo x > notes/{a,b}.md', 'echo x > {notes,notes}/b.md', 'cat {a,b}.md', 'git -C {notes,notes} status', 'echo ${HOME}', 'echo {a}', 'echo {}']);
+});
+
+test('a glob on the route of a write is expanded against the file system: it is the mount it may name (L-e)', () => {
+  assertDenied([
+    'echo x > vau*/team/n.md',
+    'echo x > v[a]ults/team/n.md',
+    'echo x > v?ults/team/n.md',
+    'echo x > v[!b]ults/team/n.md',
+    'echo x > */team/n.md',
+    'echo x > **/team/n.md',
+    'echo x > vaults/t*/n.md',
+    'echo x > vaults/*/n.md',
+    'echo x > link-te*/n.md',
+    'echo x > link-t?am/n.md',
+    `echo x > ${join(dirname(own), 'own-v*')}/n.md`,
+    'cd vaults && echo x > t*/n.md',
+    'git -C vaults/te* commit -m x',
+    'git -C v?ults/team commit -m x',
+    "git -C 'proj*/dev-root' commit -m x",
+    'git -C link-te* add x',
+    'git --git-dir=v*/team/.git add x',
+    'git --work-tree=v*/team add x',
+    "git rm -r 'vau*/te*'",
+    "git rm -r 'vault*'",
+    'git rm -r vau*',
+    'git rm -r v?ults/team',
+    'git add vaul*/team/shared.md',
+    'git add "vaults/t*"',
+    'git checkout -- v*/team/shared.md',
+    'V=vau*; echo x > $V/team/n.md',
+    'echo x > VAU*/team/n.md',
+  ], MOUNT);
+  assertAllowed([
+    'echo x > not-here-*/n.md',
+    'echo x > *.log',
+    'echo x > new-*',
+    'echo x > notes/*.md',
+    'echo x > no*/b.md',
+    'echo x > vaults-*/n.md',
+    'git add notes/*.md',
+    'git rm -r new-*',
+    "git rm -r 'no*'",
+    'git add no*/a.md',
+    'git -C no* status',
+    'git -C no* add a.md',
+    'git -C vaults/te* log',
+    'git commit -m "vau* is a glob"',
+    'ls vau*/t*',
+  ]);
+});
+
+// Audit 5: braces the guard cannot expand fail closed, one budget per command, git's abbreviated options,
+// wrappers with attached values, quoted text that is no expansion, and a glob over the installation's own files.
+test('a brace the guard cannot expand in full is judged as every mount below its folder (sequences, past the cap)', () => {
+  const commas = ','.repeat(70);
+  assertDenied([
+    'echo x > va{u..u}lts/team/n.md',
+    'echo x > {a..z}aults/team/n.md',
+    'echo x > {1..3}{a..z}{a..z}/team/n.md',
+    'echo x > {v..v}aults/team/n.md',
+    `echo x > ${'{a,b}'.repeat(8)}vaults/team/n.md`,
+    `echo x > {${commas}vaults}/team/n.md`,
+    `echo x > {${commas}vaults/team}/n.md`,
+    'echo x > vaults/{1..100000}/n.md',
+    'git -C {1..3}{a..z}{a..z}vaults/team commit -m x',
+  ], MOUNT);
+  assertAllowed(['echo x > notes/{1..3}.md', 'echo x > notes/{a..c}{1,2}.md', 'echo x > {01..03}.log', 'git -C notes status {1..3}']);
+});
+
+test('a command is judged within a budget of its own, not one per word: 1 MB of braces and globs is read in a couple of seconds', () => {
+  const brace = `echo x > ${Array.from({ length: 40000 }, () => '{a,b}').join('/')}`;
+  const unclosed = `echo x > ${'{'.repeat(1000000)}`;
+  const globs = `echo ${Array.from({ length: 40000 }, (_, i) => `*/*/*/x${i}*`).join(' ')}`;
+  const wide = `cat ${'{x,'.repeat(250000)}`;
+  for (const [what, command] of Object.entries({ brace, unclosed, globs, wide })) {
+    const started = Date.now();
+    spawnSync(process.execPath, [join(dir, 'oikos', 'tools', 'hooks', 'host-hook.mjs'), 'git-guard'], {
+      cwd: dir, input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd: dir, tool_input: { command } }), encoding: 'utf8', maxBuffer: 1 << 28, env: cleanEnv({ CLAUDE_PROJECT_DIR: dir }),
+    });
+    const spent = Date.now() - started;
+    console.log(`# ${what}: ${command.length} chars judged in ${spent} ms (hook process included)`);
+    assert.ok(spent < 5000, `${what}: ${spent} ms`);
+  }
+  assertDenied([`echo x > ${'a'.repeat(5000)}{b,c}/vaults/team/n.md`, `echo x > ${'a'.repeat(5000)}*/team/n.md`], MOUNT);
+});
+
+test('git takes an unambiguous prefix of the long options it parses itself: --fil, --sep, --pre are the options they stand for', () => {
+  assertDenied([
+    'git config --fil vaults/team/x.cfg core.hooksPath /tmp',
+    'git config --file=vaults/team/x.cfg a.b c',
+    'git config --fi=vaults/team/x.cfg a.b c',
+    'git init --sep=vaults/team/g notes-new',
+    'git init --separate vaults/team/g notes-new',
+    'git clone --sep vaults/team/g notes notes-copy',
+    'git checkout-index -a --pre=vaults/team/',
+    'git checkout-index -a --pre vaults/team/',
+    'git checkout-index -a --pr=vaults/',
+    'git fast-export --export-marks=vaults/team/m HEAD',
+    'git fast-export --export-marks vaults/team/m HEAD',
+  ], MOUNT);
+  assertAllowed([
+    'git config --fil notes/x.cfg a.b c',
+    'git init --sep=notes/g notes-new',
+    'git checkout-index -a --pre=notes/',
+    'git diff --out=vaults/team/n.md HEAD',
+    'git format-patch --output-d=vaults/team -1',
+    'git fast-export --export-m=vaults/team/m HEAD',
+  ]);
+});
+
+test('a wrapper with a short option and its value attached is read: strace -fo, ltrace -o, eatmydata, fakeroot, faketime, valgrind', () => {
+  const git = 'git -C vaults/team commit -m x';
+  assertDenied([
+    `strace -fo /dev/null ${git}`,
+    `strace -ofile ${git}`,
+    `ltrace -fo /dev/null ${git}`,
+    `strace -qqfo /dev/null -e trace=file ${git}`,
+    `eatmydata ${git}`,
+    `fakeroot ${git}`,
+    `fakeroot -- ${git}`,
+    `faketime '2020-01-01 00:00:00' ${git}`,
+    `faketime -f +1d ${git}`,
+    `valgrind ${git}`,
+    `valgrind -q --tool=none ${git}`,
+  ], MOUNT);
+  assertAllowed(['echo git -C vaults/team commit', 'echo eatmydata git -C vaults/team commit', 'strace -fo /dev/null ls', 'valgrind ls']);
+});
+
+test('~name and a brace group in quotes or in a heredoc body are text, not an expansion', () => {
+  assertAllowed([
+    'echo "about ~2/3 of cases" >> notes/n.md',
+    'git commit -m "speed up ~2/3"',
+    'git commit -m "see ~bob/notes"',
+    "git commit -m 'see ~bob/notes'",
+    'git commit -m "move {../other,x}"',
+    "cat > notes/n.md <<'EOF'\nabout ~2/3 and ~bob/x and {../other,x}\nEOF",
+    'cat > notes/n.md <<EOF\nabout ~2/3 and ~bob/x and {../other,x}\nEOF',
+  ]);
+  assertDenied(['echo ~bob/x', 'cat {~bob,x}/y', 'echo a=~bob/x', 'echo "x" ~bob/y'], HOME);
+  assertDenied([`cat {${relative(dir, stranger)},x}/oikos.yaml`], OTHER);
+});
+
+test('the target of cd and pushd is expanded like any unquoted word: braces, sequences, globs; one the guard cannot expand fails closed', () => {
+  const commas = ','.repeat(70);
+  assertDenied([
+    'cd vaults/te{a..a}m && git commit -m x',
+    'cd vaults/t* && git commit -m x',
+    'cd v*/team && git commit -m x',
+    'pushd vaults/t* && git commit -m x',
+    'cd vaults/{a,team} && git commit -m x',
+    `cd vaults/{${commas}team}; git commit -m x`,
+    'cd vaults/{1..3}{a..z}{a..z}; git commit -m x',
+    'G=gi; ${G}t -C vaults/team commit -m x',
+    'G=gi; ${G}t -C vaults/team commit -m x',
+  ], MOUNT);
+  assertAllowed([
+    'cd notes && git commit -m x',
+    'cd "{a,vaults/team}" ; git commit -m x',
+    'cd n* && git commit -m x',
+    'cd notes/{a,b} && git status',
+    'G=gi; ${G}t -C notes commit -m x',
+  ]);
+});
+
+test('a glob in git checkout, git restore or git rm --cached over the installation itself is no write into a mount; the mount as the repository is still one', () => {
+  assertAllowed(['git checkout -- *', 'git restore *', 'git restore --staged *', 'git rm --cached *', 'git rm -r --cached *', 'git checkout -- t*'], join(dir, 'vaults'));
+  assertAllowed(['git restore vau*', 'git checkout -- v*', 'git checkout -- no*', 'git rm --cached no*']);
+  assertDenied([
+    'git -C vaults/team checkout -- *',
+    'git -C vaults/te* restore *',
+    'git --work-tree=vaults/team checkout -- *',
+    'git checkout -- vaults/team/shared.md',
+    'git checkout -- v*/team/shared.md',
+    'git rm -r *',
+    'git rm -r vau*',
+    'git mv * x',
+    'git checkout -- */*',
+  ], MOUNT);
+  assertDenied(['git add t*', 'git rm -r t*', 'git mv t* x'], MOUNT, join(dir, 'vaults'));
+});
+
+test('CDPATH, an assigned HOME, `function name { … }` and a nested command reach a mount like the plain cd (audit 6, D-AUDIT6-CD)', () => {
+  const vaults = join(dir, 'vaults');
+  assertDenied([
+    `CDPATH=${vaults}; cd team && git commit -m x`,
+    `export CDPATH=${vaults}; cd team; git commit -m x`,
+    `CDPATH=${vaults} cd team; git commit -m x`,
+    `CDPATH=/nowhere:${vaults}; cd team; git commit -m x`,
+    `CDPATH=${vaults}; cd te*; git commit -m x`,
+    'CDPATH=$UNSET_DIR; cd team; git commit -m x',
+    `HOME=${team}; cd; git commit -m x`,
+    `HOME=${team}; cd ~; git commit -m x`,
+    `HOME=${vaults}; cd ~/team; git commit -m x`,
+    'function f { cd vaults/team; }; f; git commit -m x',
+    'function f() { cd vaults/team; }; f; git commit -m x',
+    'cd vaults/team; bash -c "git commit -m x"',
+    'cd vaults/team; sh -c "git commit -m x"',
+    'cd vaults/team; find . -maxdepth 0 -exec git commit -m x \\;',
+    'cd vaults/team; find . -maxdepth 0 -execdir git commit -m x +',
+    'cd vaults/team; echo x | xargs git commit -m',
+  ], MOUNT);
+  assertAllowed([
+    `CDPATH=/tmp; cd ${plain}; git commit -m x`,
+    `CDPATH=${vaults}; cd ./notes; git commit -m x`,
+    `CDPATH=${vaults}; cd ${plain}; git commit -m x`,
+    `CDPATH=${vaults}; cd nothing; git commit -m x`,
+    `HOME=${plain}; cd; git commit -m x`,
+    'cd vaults/team; bash -c "git status"',
+    'cd vaults/team; find . -maxdepth 0 -exec git log \\;',
+    'function f { cd notes; }; f; git commit -m x',
+  ]);
+});
+
+// Audit 6b (D-AUDIT6B-SHELL-MODEL): the shell guard guards against mistakes and the obvious forms, not a boundary — a program read
+// from a file (`sh script.sh`) is an accepted residual; the cheap forms below are closed.
+const OUTSIDE = plain; // a folder with no mount: only what the command reaches decides
+const VAULTS = join(dir, 'vaults');
+const nested = (inner, levels) => (levels === 0 ? inner : nested(`bash -c ${JSON.stringify(inner)}`, levels - 1));
+
+test('a shell with no -c: a here-string is its command; a pipe, -s, /dev/stdin or <(…) is a script nobody can see, so a git write or a redirect in that command is denied (H1)', () => {
+  assertDenied([
+    `bash <<< "cd ${team}; git commit -m x"`,
+    `bash <<< "git -C ${team} commit -m x"`,
+    `sh <<< 'echo x > ${team}/n.md'`,
+    `cd ${team}; bash <<< "git commit -m x"`,
+    'echo "cd vaults/team" | bash; git commit -m x',
+    `echo "cd ${team}" | sh; git commit -m x`,
+    'echo x | bash -s; git commit -m x',
+    'echo x | bash /dev/stdin; git commit -m x',
+    'bash <(echo x); git commit -m x',
+    `cd ${team}; echo x | bash; git commit -m x`,
+    'echo x | bash > out.md',
+  ], MOUNT, OUTSIDE);
+  assertAllowed([
+    'bash <<< "echo hi"',
+    `cd ${team}; bash <<< "git status"`,
+    'echo x | bash',
+    'echo x | bash -s',
+    'echo "cd vaults/team; echo hi" | sh',
+    'bash <(echo x)',
+    'sh script.sh',
+    'bash ./run.sh --flag',
+    'bash < script.sh',
+    'bash <<EOF\necho hi\nEOF',
+    `echo x | bash > ${OUTSIDE}/out.md`,
+  ], OUTSIDE);
+});
+
+test('`bash -c -- "…"`, `sh -c -- "…"`: the command is the first word after -c that is no `--` and no option (H2)', () => {
+  assertDenied([
+    `bash -c -- "git -C ${team} commit -m x"`,
+    `sh -c -- 'git -C ${team} commit -m x'`,
+    `bash -c -e "git -C ${team} commit -m x"`,
+    `bash -lc -- "git -C ${team} commit -m x"`,
+  ], MOUNT, OUTSIDE);
+  assertAllowed(['bash -c -- "git status"', 'sh -c -- "echo hi"'], OUTSIDE);
+});
+
+test('a command nested deeper than the guard reads is denied when it holds a command inside (H3); three levels are read', () => {
+  const git = `git -C ${team} commit -m x`;
+  assertDenied([nested(git, 1), nested(git, 3)], MOUNT, OUTSIDE);
+  assertDenied([nested('git status', 4), nested('echo hi', 5), `bash -c ${JSON.stringify(nested('echo hi', 3))}`], /more than 3 levels deep/, OUTSIDE);
+  assertAllowed([nested('git status', 3), nested('echo hi', 2)], OUTSIDE);
+});
+
+test('the folder a cd leads to is a set: a glob, a brace group, CDPATH and each assigned HOME all stay, and a later relative cd is read from each (M1)', () => {
+  assertDenied([
+    `cd ${dir}/[n]otes; cd ../vaults/team; git commit -m x`,
+    `cd ${dir}/{notes,projects}; cd ../vaults/team; git commit -m x`,
+    `CDPATH=${dir}; cd notes; cd ../vaults/team; git commit -m x`,
+    `export CDPATH=:${dir}; cd notes; cd ../vaults/team; git commit -m x`,
+    `HOME=${dir}; cd; cd vaults/team; git commit -m x`,
+    `export HOME=${dir}; cd; cd vaults/team; git commit -m x`,
+    `HOME=${dir}; pushd ~; pushd vaults/team; git commit -m x`,
+    `HOME=${dir}; cd ~/notes; cd ../vaults/team; git commit -m x`,
+  ], MOUNT, OUTSIDE);
+  assertAllowed([
+    `cd ${dir}/[n]otes; cd ..; git commit -m x`,
+    `CDPATH=${dir}; cd notes; git commit -m x`,
+    `HOME=${OUTSIDE}; cd; git commit -m x`,
+  ], OUTSIDE);
+});
+
+test('the command inside a shell gets the variables and the wide folders of the one around it (M2)', () => {
+  assertDenied([
+    `CDPATH=${VAULTS} bash -c "cd team; git commit -m x"`,
+    `export CDPATH=${VAULTS}; bash -c "cd team; git commit -m x"`,
+    `env CDPATH=${VAULTS} bash -c "cd team; git commit -m x"`,
+    `HOME=${team} bash -c "cd; git commit -m x"`,
+    `export HOME=${team}; sh -c "cd && git commit -m x"`,
+    `shopt -s nullglob; cd ${dir}/{a..z}{a..z}?lt; bash -c "git commit -m x"`,
+    `shopt -s nullglob; cd ${dir}/{a..z}{a..z}?lt; find . -maxdepth 0 -exec git commit -m x \\;`,
+  ], MOUNT, OUTSIDE);
+  assertAllowed([
+    `CDPATH=${VAULTS} bash -c "cd ${OUTSIDE}; git commit -m x"`,
+    `CDPATH=${OUTSIDE} bash -c "cd notes; git status"`,
+  ], OUTSIDE);
+});
+
+test('find -execdir, and an -exec that is given the match ({} or $1), run below every path find starts from (M3)', () => {
+  assertDenied([
+    `find ${team} -maxdepth 1 -iname inbox -execdir git commit -m x \\;`,
+    `find ${team} -maxdepth 0 -exec sh -c "cd {} && git commit -m x" \\;`,
+    `find ${team} -maxdepth 0 -exec sh -c 'cd "$1" && git commit -m x' _ {} \\;`,
+    `find ${team} -maxdepth 0 -exec sh -c 'cd "$@" && git commit -m x' _ {} +`,
+    `find ${VAULTS} -name inbox -okdir git commit -m x \\;`,
+  ], MOUNT, OUTSIDE);
+  assertAllowed([
+    "find . -name '*.md' -exec grep -l x {} +",
+    `find ${team} -name '*.md' -exec grep -l x {} +`,
+    `find ${team} -name '*.md' -execdir git log \\;`,
+    `find ${OUTSIDE} -maxdepth 0 -exec sh -c 'cd "$1" && git commit -m x' _ {} \\;`,
+    `cd ${team}; find . -maxdepth 0 -exec git log \\;`,
+  ], OUTSIDE);
+});
+
+test('NAME+= makes a variable one the guard cannot tell; ~ in an assigned value is read with the assigned HOME (M4)', () => {
+  assertDenied([
+    `CDPATH=/nowhere; CDPATH+=:${VAULTS}; cd team; git commit -m x`,
+    `CDPATH+=:${VAULTS}; cd team; git commit -m x`,
+    `export CDPATH+=:${VAULTS}; cd team; git commit -m x`,
+    `HOME=${dir}; CDPATH=~/vaults; cd team; git commit -m x`,
+    `HOME=${dir}; export CDPATH=~/vaults; cd team; git commit -m x`,
+    `HOME=${dir}; T=~/vaults/team; git -C $T commit -m x`,
+  ], MOUNT, OUTSIDE);
+  assertAllowed([`HOME=${OUTSIDE}; CDPATH=~; cd notes; git commit -m x`], OUTSIDE);
+});
+
+test('script -c, watch, busybox sh -c, fish -c run the command they are given (L1)', () => {
+  assertDenied([
+    'cd vaults/team; script -qc "git commit -m x" /dev/null',
+    'cd vaults/team; script -c "git commit -m x" /dev/null',
+    'cd vaults/team; script --command="git commit -m x" /dev/null',
+    'cd vaults/team; watch -n1 git commit -m x',
+    'cd vaults/team; watch git commit -m x',
+    'cd vaults/team; busybox sh -c "git commit -m x"',
+    'cd vaults/team; fish -c "git commit -m x"',
+    'cd vaults/team; csh -c "git commit -m x"',
+  ], MOUNT);
+  assertAllowed(['cd vaults/team; watch -n1 git status', 'cd vaults/team; script -qc "git status" /dev/null', 'cd vaults/team; fish -c "git log"']);
+});
+
+test('a command of thousands of cd, globs and shells is decided in seconds, and what is past the budget is denied (L3)', () => {
+  const started = Date.now();
+  assertDenied([
+    `${'cd vaults/*; '.repeat(3000)}git commit -m x`,
+    `${`CDPATH=${dir}; cd note*; `.repeat(3000)}cd ../vaults/team; git commit -m x`,
+    `${'cd {notes,vaults/team}; bash -c "git status"; '.repeat(1500)}git commit -m x`,
+    Array.from({ length: 300 }, (_, i) => `bash -c "echo ${i}"`).join('; '),
+  ], /mount|more commands inside other commands/);
+  assert.ok(Date.now() - started < 20000, `decided in ${Date.now() - started} ms`);
+  assertAllowed([`${'bash -c "echo hi"; '.repeat(100)}git status`], OUTSIDE);
 });

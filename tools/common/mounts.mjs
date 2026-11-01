@@ -27,6 +27,7 @@
 // config().mounts. Nothing here reads the environment or writes a file.
 import { existsSync, readdirSync } from 'node:fs';
 import { basename, isAbsolute, join } from 'node:path';
+import YAML from 'yaml';
 import { CORE_ROOT, isCore, isInstallation, isRepoTop, isWithin, mountRoot, realOf } from './paths.mjs';
 import { SLUG, slugify } from './slug.mjs';
 
@@ -53,6 +54,15 @@ const trimmed = (path) => (path.length > 1 ? path.replace(/\/+$/, '') : path);
 const winAbsolute = (path) => /^[A-Za-z]:[\\/]/.test(path);
 const hasParentStep = (path) => path.split(/[\\/]/).includes('..');
 
+/** A value as a message shows it: JSON, or a note when it cannot be written (a circular alias in the YAML). */
+function shown(value) {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return '(a value that cannot be shown, such as a circular alias)';
+  }
+}
+
 /** The problem with a mount's path as written in `layer`, or null. A shared path stays inside the installation. */
 function pathProblem(path, layer) {
   if (!isText(path)) return 'the path must be a non-empty string';
@@ -69,7 +79,7 @@ function usesOf(entry, say) {
   const list = Array.isArray(entry.use) ? entry.use : [entry.use];
   const uses = [];
   for (const use of list) {
-    if (!MOUNT_USES.includes(use)) say(`use: unknown value ${JSON.stringify(use)} (${MOUNT_USES.join(', ')})`);
+    if (!MOUNT_USES.includes(use)) say(`use: unknown value ${shown(use)} (${MOUNT_USES.join(', ')})`);
     else if (!uses.includes(use)) uses.push(use);
   }
   return uses;
@@ -121,7 +131,7 @@ function skillsPrefix(prefix, path, say) {
     return made || null;
   }
   if (typeof prefix === 'string' && SLUG.test(prefix)) return prefix;
-  say(`skills.prefix: must be lowercase letters, digits and -, starting with a letter or digit (got ${JSON.stringify(prefix)})`);
+  say(`skills.prefix: must be lowercase letters, digits and -, starting with a letter or digit (got ${shown(prefix)})`);
   return null;
 }
 
@@ -205,7 +215,13 @@ function layerMounts(root, declared, layer, file) {
     const say = (text) => problems.push(`${file}: mounts.${keyLabel(key)}: ${text}`);
     const bad = pathProblem(key, layer);
     if (bad) { say(bad); continue; }
-    const mount = entryOf(root, trimmed(key), value, layer, say);
+    let mount;
+    try {
+      mount = entryOf(root, trimmed(key), value, layer, say);
+    } catch (e) {
+      say(`cannot be read (${e instanceof Error ? e.message : String(e)})`); // the key stays guarded, as for any entry that is no mount
+      continue;
+    }
     if (!mount) continue;
     if (barred.some((dir) => isWithin(mount.root, dir))) { say('a mount is not at or under oikos/ or .local/'); continue; }
     if (isWithin(realOf(root), mount.root)) { say('a mount is not the installation or a folder above it'); continue; }
@@ -239,35 +255,139 @@ function flowKeys(text) {
   return keys;
 }
 
+const unquote = (text) => text.replace(/^(["'])(.*)\1$/, '$2');
+/** `text` without a trailing comment (a `#` at the start or after a blank), trimmed. */
+const withoutComment = (text) => text.replace(/(^|\s)#.*$/, '').trim();
+/** A mapping key at the start of `text`: quoted, or plain (not starting with an indicator), up to its colon. */
+const KEY_AT_START = /^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s#'"?:[{*&!|>-][^#]*?|-[^\s#][^#]*?)\s*:(?=\s|$)/;
+/** A top-level `mounts:` line — also as the key of a list item (`- mounts:`) or quoted: the markers before it, and what follows the colon. */
+const MOUNTS_LINE = /^((?:\s*-\s+)*)(["']?)mounts\2\s*:(.*)$/;
+
+/** The items of the flow sequence that starts `text` (`[a, "b c", {d: 1}]`), best effort, one line: the scalars, and the keys of a mapping in it. */
+function flowItems(text) {
+  const items = [];
+  let item = '';
+  let depth = 0;
+  const close = () => {
+    const entry = item.trim();
+    if (entry.startsWith('{')) items.push(...flowKeys(entry).map(unquote));
+    else if (entry) items.push(unquote(entry));
+    item = '';
+  };
+  for (const [token] of text.matchAll(FLOW_TOKEN)) {
+    if (token === '[' && depth === 0) { depth = 1; continue; }
+    if (token === ',' && depth === 1) { close(); continue; }
+    if (token === ']' && depth === 1) { close(); break; }
+    depth += FLOW_DEPTH[token] ?? 0;
+    item += token;
+  }
+  close();
+  return items;
+}
+
 /**
- * The keys under `mounts:` of the YAML `text`, found by scanning its lines — for a file that does not
- * parse, whose entries are then not read but must stay guarded. Best effort: the block style (the keys at
- * the first indentation under `mounts:`), and a flow mapping on the `mounts:` line itself.
+ * The names one value or block line holds: a flow mapping's keys, a flow sequence's items, a mapping key
+ * (`name: …`), or a scalar — also after the markers `- ` and `? ` of a list item or a complex key. An alias
+ * is looked up by `anchored` (when it is given). Nothing is dropped for being unsure: a word that is no
+ * mount name only closes a folder to writes.
+ */
+function namesOf(text, anchored = null) {
+  let rest = withoutComment(text);
+  while (/^[-?](\s|$)/.test(rest)) rest = rest.slice(1).trim();
+  rest = rest.replace(/^(?:&\S+\s*|!\S*\s*)+/, '');
+  if (!rest || /^[:|>]/.test(rest)) return []; // a complex key's value, a block scalar
+  if (rest.startsWith('*')) return anchored ? anchored(rest.slice(1)) : [];
+  if (rest.startsWith('{') || rest.startsWith('[')) return rest.startsWith('{') ? flowKeys(rest).map(unquote) : flowItems(rest);
+  return scalarNames(rest);
+}
+
+/** The name a plain or quoted `rest` holds: the key before a colon, else the scalar itself, without the brackets and commas of a flow sequence split over lines. */
+function scalarNames(rest) {
+  const key = KEY_AT_START.exec(rest);
+  const name = key ? unquote(key[1]) : unquote(rest.replace(/^[,\]}[{\s]+|[,\]}\s]+$/g, ''));
+  return name === '' ? [] : [name];
+}
+
+/** The names in the lines after `lines[at]` that belong to the key at `column`: the first indentation under it, `- ` items and `? ` keys included (a `- ` may sit at the key's own column). */
+function blockNames(lines, at, column, anchored) {
+  const names = [];
+  let indent = null;
+  for (const line of lines.slice(at + 1)) {
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    const lead = line.length - line.trimStart().length;
+    if (lead < column || (lead === column && !/^-(\s|$)/.test(line.trimStart()))) break;
+    indent ??= lead;
+    if (lead === indent) names.push(...namesOf(line.trimStart(), anchored));
+  }
+  return names;
+}
+
+/** The names of the node anchored `&name` somewhere in `lines`: what follows the anchor on its line, and its block. */
+function anchoredNames(lines, name) {
+  const marker = new RegExp(String.raw`(^|\s)&${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\s|$)`);
+  const at = lines.findIndex((line) => marker.test(line));
+  if (at < 0) return [];
+  const line = lines[at];
+  const column = /^(?:\s*-\s+)*/.exec(line)[0].length;
+  return [...namesOf(line.slice(line.search(marker)).replace(/^\s*&\S+/, '')), ...blockNames(lines, at, column)];
+}
+
+/**
+ * The names under `mounts:` of the YAML `text`, found by scanning its lines — for a file that does not
+ * parse, whose entries are then not read but must stay guarded; one function for the configuration and the
+ * guards. Best effort, and open to the shapes that name a mount without being a mapping: the keys at the
+ * first indentation under `mounts:` (`name:`, `? name`, quoted), its list items (`- name`, `- name: …`, a
+ * flow sequence), a flow mapping or sequence on the `mounts:` line, a lone name, an alias whose anchor is
+ * elsewhere in the file, and a `mounts:` that is the key of an item of a top-level list.
  * @param {string} text
  * @returns {string[]}
  */
 export function scanMountKeys(text) {
-  const keys = [];
-  const unquote = (key) => key.replace(/^(["'])(.*)\1$/, '$2');
-  let inside = false;
-  let indent = null;
-  for (const line of String(text).split(/\r?\n/)) {
-    if (/^mounts\s*:/.test(line)) {
-      inside = true;
-      indent = null;
-      const flow = line.replace(/^mounts\s*:/, '');
-      keys.push(...flowKeys(flow).map(unquote));
-      continue;
+  const lines = String(text).split(/\r?\n/);
+  const names = lines.flatMap((line, at) => {
+    const found = MOUNTS_LINE.exec(line);
+    if (!found) return [];
+    const anchored = (name) => anchoredNames(lines, name);
+    return [...namesOf(found[3], anchored), ...blockNames(lines, at, found[1].length, anchored)];
+  });
+  return [...new Set(names)];
+}
+
+/**
+ * The paths a `mounts:` value names when it is not a mapping — a list (`- vault2`, `[vault2]`), a lone
+ * string, a list of mappings: its string items and the keys of the mappings in it, to be guarded as the keys
+ * of a mapping would be. Best effort; a circular value is walked once.
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+export function looseMountKeys(value, seen = new Set()) {
+  if (typeof value === 'string') return value.trim() === '' ? [] : [value];
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  seen.add(value);
+  if (Array.isArray(value)) return value.flatMap((item) => (isMap(item) ? Object.keys(item) : looseMountKeys(item, seen)));
+  return Object.keys(value);
+}
+
+/**
+ * Every path the YAML `text` of a mounts file names under `mounts:`, however it is written, without
+ * resolving anything: the keys found by scanning its lines ({@link scanMountKeys}) and, when it parses, those
+ * of the mapping or the loose names of a value that is none ({@link looseMountKeys}) — also in the items of a
+ * top-level list. The one function for a mounts file that is not read as a mapping, whether the configuration
+ * resolves or not; nothing here opens a read.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function declaredMountKeys(text) {
+  const keys = scanMountKeys(text);
+  try {
+    const parsed = YAML.parse(text);
+    // a top level that is a list holds `mounts:` in its items
+    for (const part of Array.isArray(parsed) ? parsed : [parsed]) {
+      const mounts = isMap(part) ? part.mounts : undefined;
+      if (mounts !== undefined && mounts !== null) keys.push(...(isMap(mounts) ? Object.keys(mounts) : looseMountKeys(mounts)));
     }
-    if (!inside || /^\s*(#.*)?$/.test(line)) continue;
-    if (/^\S/.test(line)) { inside = false; continue; }
-    const lead = line.length - line.trimStart().length;
-    indent ??= lead;
-    if (lead !== indent) continue;
-    const key = /^\s+("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s#'"?:-][^#]*?|-[^\s#][^#]*?)\s*:(?=\s|$)/.exec(line);
-    if (key) keys.push(unquote(key[1]));
-  }
-  return keys;
+  } catch { /* a text that does not parse is scanned above */ }
+  return [...new Set(keys)];
 }
 
 /**
@@ -324,12 +444,12 @@ function subfolders(dir) {
   }
 }
 
-/** The first installation found below the folder `root` — within NESTED_DEPTH levels and NESTED_FOLDERS folders, links, `.git` and `node_modules` left alone — or null. */
+/** The first installation found below the folder `root` — within NESTED_DEPTH levels and NESTED_FOLDERS folders, links, `.git`, `node_modules` and the core (an `oikos/` that is a copy of it, not a link) left alone — or null. `root` itself is not looked at. */
 function nestedInstallation(root) {
   let level = [root];
   let seen = 0;
   for (let depth = 0; depth < NESTED_DEPTH && level.length; depth++) {
-    const next = level.flatMap(subfolders).slice(0, NESTED_FOLDERS - seen);
+    const next = level.flatMap(subfolders).filter((dir) => !isCore(dir)).slice(0, NESTED_FOLDERS - seen);
     seen += next.length;
     const found = next.find((dir) => isInstallation(dir));
     if (found) return found;
@@ -338,10 +458,10 @@ function nestedInstallation(root) {
   return null;
 }
 
-/** What is wrong with a mount's root as to the core and the installations (D01), or '' when nothing: it holds the core, it is an installation used for something, or it holds one. */
+/** What is wrong with a mount's root as to the core and the installations (D01), or '' when nothing: it holds the core, it is an installation used for something, or it holds another installation (a linked installation too, below its own root). */
 function boundaryProblem(m) {
   if (isWithin(realOf(CORE_ROOT), m.root)) return 'a mount is not the core or a folder that holds it';
-  if (isInstallation(m.root)) return m.use.length ? 'a linked installation is registered without `use` — `use` would make its files a source of skills or notes here (ADR 0007 D05)' : '';
+  if (isInstallation(m.root) && m.use.length) return 'a linked installation is registered with `use` — register it without: `use` would make its files a source of skills or notes here (ADR 0007 D05)';
   const nested = nestedInstallation(m.root);
   return nested ? `it holds the installation ${nested} — a mount does not contain another installation; register that one by itself, without \`use\` (ADR 0007 D01)` : '';
 }

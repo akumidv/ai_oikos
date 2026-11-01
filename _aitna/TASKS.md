@@ -144,6 +144,14 @@ run from an installation or with `OIKOS_HOME`.
   — accepted gap (re-audit): the file matcher does not match `mcp__*`; no oikos guard is wired for Codex
   (`.codex/hooks.json` holds akmon's only); `cp`, `sed -i`, `python`, `node -e` writing into a mount, another
   installation or a closed file pass the shell guard (see L2, L3) — [ADR 0007](../docs/adr/0007-mounts.md) D02, D03, D05.
+  — accepted residuals (audit 4, 2026-11-04) of the shell judgement: loop variables (`for d in vault; do git -C $d …`),
+  `$(which git)` or `$G"t"` as the program, `eval cd …`, `cd "$(…)"`, a command that kills the hook dispatcher itself, `${VAR:-x}` defaults (`${TMPDIR:-/tmp}`), `tee`/`cp`/`mv`/`ln` into the hook state
+  folder, git's own pathspec `*` crossing `/`, and `NODE_OPTIONS` already in the host's environment (node has no flag
+  to ignore it; the settings route is closed by `env`); audit 5 (D-AUDIT5-CORE-LINK, D-AUDIT5-GIT-C): the shell
+  replacing, moving or removing the `oikos/` core link (`ln`, `mv`, `rm`), shell writers over settings (`cp`,
+  `sed -i`), and `git -c <key>=<value>` values that write (`core.pager=…`, L3); audit 6b (D-AUDIT6B-SHELL-MODEL, D-AUDIT6B-SHELL-SKILLS): a program written to a file and run (`sh f.sh`, `node f.mjs`) or fed to a shell through a pipe, `-s` or `<(…)`, and shell writes of skill, agent and command files — [ADR 0007](../docs/adr/0007-mounts.md) D02.
+- L6 · Guard: nested installations and the search above the installation · deferred · A folder holding another installation is found only by a shallow search
+  — accepted gap (owner, 2026-11-04): a folder that holds another installation but is not above this one is searched without that installation being detected beyond the nested-installation search (two levels, at most 100 folders; deeper nesting is not detected); `list_directory` of a parent folder lists names (it is not a search tool). A search scope above the installation is denied, with no exception for a mount — [ADR 0007](../docs/adr/0007-mounts.md) D01, D05; [design](../docs/design/mounts.md) D-S4-ANCESTOR.
 - F8 · Extension rules from the installation · active · No app or block names in the core's extension
   — the owner's choice: `oikos.yaml` `browser_helpers` (per site: optional hosts, helpers with
   `hide`/`open` titles); `sync` builds the extension into `.local/extension/` (core code, a
@@ -186,9 +194,9 @@ run from an installation or with `OIKOS_HOME`.
   — [design](../docs/design/mounts.md); every `D-A9-*` decided (2026-10-28): shared + `.local/mounts.yaml` with the local entry winning,
   outside mounts, vault migrated, helper, leak check through `outgoingFindings`, `mention_assistant` per mount, `vault` derived from
   `use: wiki`, an installation writes only into itself (notes through `vault` only), `skills.only`. [ADR 0007](../docs/adr/0007-mounts.md)
-  accepted, with both audits' fixes and decisions in. Built, uncommitted: S1, S2, S3, `setup mount
+  accepted, with both audits' fixes and decisions in. Built: S1, S2, S3 (committed), `setup mount
   add|remove`, D-A9-GUARD-FILES (closed guard files and settings keys, listed `allow:` passes, short entries ignored, `sync --prune`),
-  D-S3-PREFIX, `skills.tracked`. Next: S6 (`vault`), S4 (shell and `git`, F10, F15), then S5, S7, S8, the gate; gaps L4, L5;
+  D-S3-PREFIX, `skills.tracked`, S4 (shell and `git`), S6 (`vault`) and the security-audit fixes. Next: the re-audit, then S5, S7, S8, the gate; gaps L4–L6;
   A5, A11 and the desk's phase 3 wait on it
 - A10 · akmon in installations · active · Authoring agents and skills in an installation under akmon, attached softly for non-developers
   — [design](../docs/design/akmon-in-installations.md) drafted: the `guided` actor of akmon's actor work, the core's pinned akmon, oikos `sync`
@@ -201,6 +209,9 @@ run from an installation or with `OIKOS_HOME`.
   with both installations' terms, a finding refuses, text sources only ([ADR 0007](../docs/adr/0007-mounts.md) D05); every
   outgoing check also takes the linked installations' terms; scopes inside one `.local/` rejected. Slices B1–B4 after A9 S1 and S2. The handoff's move findings are in A9
   (slice S5) and P3-5
+- A12 · OS sandbox as the real write boundary for mounts · active · Shell guards are not a boundary
+  — architect, design fork (D-AUDIT6B-SHELL-MODEL, [ADR 0007](../docs/adr/0007-mounts.md) D02): check what the Claude Code and Qwen sandboxes can deny
+  (write paths, child processes), how the `vault` tool then writes into a mount, and whether hooks can rely on it
 - P1-5 · `oikos/` as a pinned submodule · active · One way to link the core into every installation, instead of a symlink
   — not designed yet: a public-url submodule pinned to a commit, a `local` remote on this machine's core checkout (push off), objects
   via `--reference`/alternates; one update command (fetch from local, checkout, sync), the user commits the new pointer; risk: a pinned

@@ -397,6 +397,77 @@ test('executable: a remote embed is found in every spelling — srcset, poster, 
   }
 });
 
+test('executable: a remote embed is found with backslashes, the other URL-bearing attributes and CSS escapes (L-d)', () => {
+  const embeds = [
+    '<img src="https:\\\\cdn.example.com\\p.png">',
+    '<img src="https:/\\cdn.example.com/p.png">',
+    '<img src="\\\\cdn.example.com\\p.png">',
+    '![a](https:\\\\cdn.example.com/p.png)',
+    '![a](https:/\\cdn.example.com/p.png)',
+    '![[https:\\\\cdn.example.com/p.png]]',
+    '<table background="https://cdn.example.com/p.png"><tr><td>x</td></tr></table>',
+    '<td background=//cdn.example.com/p.png>x</td>',
+    '<body background="https://cdn.example.com/p.png">',
+    '<form action="https://cdn.example.com/p">x</form>',
+    '<button formaction="https://cdn.example.com/p">x</button>',
+    '<input type="image" formaction=https://cdn.example.com/p>',
+    '<svg><use xlink:href="https://cdn.example.com/p.svg#a"/></svg>',
+    '<object data="https://cdn.example.com/p.swf"></object>',
+    '<div style="background:\\75 rl(https://cdn.example.com/p.png)">x</div>',
+    '<div style="background:\\75rl(https://cdn.example.com/p.png)">x</div>',
+    '<div style="background:u\\72l(https://cdn.example.com/p.png)">x</div>',
+    '<div style="background:url(\\68ttps://cdn.example.com/p.png)">x</div>',
+    '<div style="background:url(https:\\\\cdn.example.com\\p.png)">x</div>',
+    '<style>\\40import "https://cdn.example.com/a.css";</style>',
+    '![a][r]\n\n[r]: https:\\\\cdn.example.com\\p.png',
+    '<img srcset="a.png 1x, https:\\\\cdn.example.com\\p.png 2x">',
+  ];
+  for (const text of embeds) assert.equal(outgoingFindings(text, REFUSING)[0]?.match, 'remote-embed', JSON.stringify(text));
+  assert.equal(outgoingFindings('line\n\n<div style="background:\\75 rl(https://cdn.example.com/p.png)">x</div>', REFUSING)[0].line, 3, 'the finding is on the line the escape sits on');
+  const ordinary = [
+    'a [link](https://example.com) and a <a href="https://example.com">link</a> and https://example.com/a.png',
+    '![a](local.png) and <img src="img\\a.png"> and <table background="img/bg.png"><tr><td>x</td></tr></table>',
+    '<form action="/submit">x</form> and <div style="background:\\75 rl(img/a.png)">x</div>',
+    'a \\n and \\* escapes and a \\\\ pair',
+  ];
+  for (const text of ordinary) assert.deepEqual(kinds(text, REFUSING), [], JSON.stringify(text));
+});
+
+test('executable: a remote embed with a tab or line break inside its address, as a browser reads it, and the SVG elements are found (L4)', () => {
+  const T = '\t';
+  const embeds = [
+    `<img src="ht${T}tps://cdn.example.com/p.png">`,
+    '<img src="h\nttps://cdn.example.com/p.png">',
+    '<img src="h\r\nttps://cdn.example.com/p.png">',
+    `<img src="https:${T}//cdn.example.com/p.png">`,
+    `<img src="/${T}/cdn.example.com/p.png">`,
+    `<img src='ht${T}tps://cdn.example.com/p.png'>`,
+    `<img src="ht&#9;tps://cdn.example.com/p.png">`,
+    `<img src="ht&Tab;tps://cdn.example.com/p.png">`,
+    `<img src="h&#x0A;ttps://cdn.example.com/p.png">`,
+    `![a](ht${T}tps://cdn.example.com/p.png)`,
+    `![a](<ht${T}tps://cdn.example.com/p.png>)`,
+    `![a](/${T}/cdn.example.com/p.png)`,
+    `![[ht${T}tps://cdn.example.com/p.png]]`,
+    '<svg><feImage href="https://cdn.example.com/p.png"/></svg>',
+    '<svg><feImage xlink:href="//cdn.example.com/p.png"/></svg>',
+    '<svg><image href="https://cdn.example.com/p.png"/></svg>',
+    '<svg><use href="https://cdn.example.com/p.svg#a"/></svg>',
+    `<svg><feImage href="ht${T}tps://cdn.example.com/p.png"/></svg>`,
+  ];
+  for (const text of embeds) assert.equal(outgoingFindings(text, REFUSING)[0]?.match, 'remote-embed', JSON.stringify(text));
+  const lined = 'one\ntwo\n<img\n  alt="a"\n  src="h\nttps://cdn.example.com/p.png">\nfive';
+  assert.deepEqual(outgoingFindings(lined, REFUSING).map((f) => [f.line, f.match]), [[3, 'remote-embed']], 'reported on the line the element starts on, in the original text');
+  const ordinary = [
+    `a [link](https://example.com) and a ${T}tab and <a href="ht${T}tps://example.com">link</a> and https://example.com/a.png`,
+    `![a](local${T}.png) and <img src="img/${T}a.png"> and ![[a.png]]`,
+    '![a](\n\nlocal.png)\nand text\nhttps://example.com',
+    '<svg><feImage href="local.png"/></svg> and <img src="ht&#9;ml.png"> and <img alt="a&#100;">',
+    '<img src="a.png"\n  alt="https://example.com/x">',
+  ];
+  for (const text of ordinary) assert.deepEqual(kinds(text, REFUSING), [], JSON.stringify(text));
+});
+
 test('executable: ordinary notes still pass — local images, plain links, reference links, local CSS, an escaped tag, an ampersand', () => {
   const ordinary = [
     '![](img/a.png) and ![[a.png]] and ![alt](img/a.png "title")',

@@ -2,9 +2,11 @@
 
 **Status: accepted.** The owner decided every point below in chat, including the points both
 `k_auditor` passes raised and the fixes of the security re-audit of D04 and D05, and accepted this
-text; the refinements of ADR 0003 below are commitments with it. Design, alternatives, open points
+text; the refinements of ADR 0003 below are commitments with it. The owner's decisions of 2026-11-04
+are in the text too: D01 (the problem entries, the user-level settings closed), D04 (`wiki.rules`), D05
+(the search above the installation, the git repository). Design, alternatives, open points
 and the plan: [docs/design/mounts.md](../design/mounts.md). Implementation state:
-[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (A9, A11; the accepted gaps L4, L5). Builds on
+[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (A9, A11; the accepted gaps L4–L6). Builds on
 [ADR 0002](0002-local-stores.md) D01 (what lives in `.local/`) and refines
 [ADR 0003](0003-outward-content.md): vault notes (D04 below) leave the unchecked routes of its D05
 for a checked tool route under its D01, and their override is narrower than its D03; the rules of
@@ -40,21 +42,48 @@ this ADR.
   pointers, not the host: a host may still list a mount's own skills when it lazy-loads that folder
   (design Q2). In the resolved mount, `skills.prefix` is the effective prefix, or null when none is
   usable, and `skills.tracked` is always a boolean. There is no `use: rules`; a wiki's `wiki.rules`
-  is the note schema of that vault, data for the `vault` connector, not agent rules.
+  is a markdown file whose YAML front matter holds that vault's note rules (`required`, `language`,
+  `allow`; D04), data for the `vault` connector, not agent rules.
 - **A problem entry is not used, and stays protected.** A mount that is this installation or a
   folder above it, or that is or contains the core or another installation (a linked installation
-  registered without `use` excepted, D05), a linked installation with `use`, and any other entry
-  with a problem (a missing root, a root that is not a repository top, an overlap) is a problem:
+  registered without `use` excepted, D05, and only while it holds no installation itself), a linked
+  installation with `use`, and any other entry with a problem (a missing root, a root that is not a
+  repository top, an overlap) is a problem:
   `sync --check` is red, and the `vault` tool and `transfer` do not use the entry. The guards keep
-  protecting its path as a mount; a problem never opens a guard.
+  protecting its path as a mount, and a problem never opens a guard: a problem entry opens no reads, and
+  every root of a mount entry, problem or not, stays guarded against writes. A `mounts:` that is not a
+  mapping (a list, a string) is a problem, and the names it declares count as declared and stay guarded. A linked installation has a
+  `.git` of its own like any repository (D05). A mount that holds another installation is found by a
+  search two levels below its root and over at most 100 folders, so a deeper nesting is not detected
+  (an accepted limit, task L6).
 - **The files the guards lean on are closed to the file tools** (`tools/hooks/mounts-lock.mjs`):
   `.local/mounts.yaml`, `.local/outgoing.yaml` and `.local/sync.json` as a whole; the `mounts:`
-  part of `oikos.yaml`; and the keys `hooks`, `disableAllHooks` and `claudeMdExcludes` of
+  part of `oikos.yaml`; and the keys `hooks`, `disableAllHooks`, `claudeMdExcludes` and `env` of
   `settings.json` and `settings.local.json` in every host folder `sync` wires (`.claude/`,
-  `.qwen/`). The user edits them in their own editor; `sync` writes its own entries as a tool.
+  `.qwen/`) — `env` because the host passes it to the guards' processes, where `OIKOS_HOME` or
+  `NODE_OPTIONS` would point the guards away from the installation or stop them (H-A) — and the same
+  keys of the user-level host settings: `~/.claude/settings.json` and `settings.local.json` there, the
+  folder `CLAUDE_CONFIG_DIR` names when it is set, and `~/.qwen/settings.json` and `settings.local.json`
+  (D-AUDIT3-USER-SETTINGS). The user edits them in their own editor; `sync` writes
+  its own entries as a tool.
   Mounts change through `setup mount add|remove … --dry-run`, a guarded write
   (`tools/hooks/writes.mjs`) that runs only after its dry run was shown and the user had the word.
   This holds for the file tools; a shell write into these files is the shell gap of D02.
+  **Refinement (audit 5: D-AUDIT5-EXEC-KEYS, D-AUDIT4-STARTUP-FILES; reshapes D-A9-GUARD-FILES).** The
+  file tools may change only the `permissions` key of the host settings files: the installation's
+  `settings.json` and `settings.local.json` of `.claude/` and `.qwen/`, and the user-level ones,
+  including the folder `CLAUDE_CONFIG_DIR` names. Every other key of those files is closed; this
+  replaces the key list above for the settings files. The text after an edit must be strict JSON (a
+  BOM, a comment or a trailing comma is denied as uncheckable); a current file that does not parse
+  denies every edit to it; an absent file counts as `{}`. Also closed to the file tools, judged by
+  real path: `.mcp.json` at the installation root, `~/.claude.json` and the one in `CLAUDE_CONFIG_DIR`,
+  and the shell startup files of the home (`~/.bashrc`, `~/.profile`, `~/.bash_profile`, `~/.zshrc`
+  and the other shell startup files, `$ZDOTDIR`'s zsh files, `~/.config/fish/conf.d` and
+  `~/.config/environment.d`). The user edits them in their own editor. Audit 6
+  (D-AUDIT6-FRONTMATTER-HOOKS = B): a file tool may not write a skill, agent or command markdown file
+  under `.claude/skills`, `.claude/agents` or `.claude/commands`, in the project or the user config dir,
+  whose front matter has a top-level `hooks` key; a malformed front matter with a `hooks:` line is
+  denied too. Audit 6b (D-AUDIT6B-PLUGINS): file tools may not write under the user config `plugins` folder (`~/.claude/plugins`, `$CLAUDE_CONFIG_DIR/plugins`), since plugin hooks and servers run outside every guard. Audit 6b (D-AUDIT6B-FRONTMATTER): the front matter is parsed with the `yaml` package, and a top-level `hooks` key, a parse error or a non-mapping top level is denied, a symlinked skill folder included.
 - **Rationale.** The agent hosts load every ancestor's `CLAUDE.md` and a subfolder's lazily, so a
   repository inside an installation leaks rules both ways unless it is declared and wired. A
   personal vault or development root is often outside the installation and must not be named in
@@ -80,19 +109,44 @@ this ADR.
   `sync --dry-run` writes nothing. An unreadable configuration never opens the guard. Reads stay
   open. Two routes write into a mount, both from oikos's own tools: a note written by the `vault`
   connector (D04), and `sync`'s own wiring, which is git-ignored there (D03 items 2–3).
+- **Which installation a hook guards.** A hook takes the host's project folder when it is an
+  installation, and `OIKOS_HOME` only when it is not, since a settings file's `env` may set that
+  variable (`hookInstallation`, DEVELOPMENT.md). When `OIKOS_HOME` leads to no installation and no
+  project folder does, outside the core, file-tool and shell writes are denied, naming `OIKOS_HOME`.
 - **The shell.** A redirection into a mount and a `git` write subcommand into a mount are denied,
   through one shared shell parser (`tools/hooks/shell.mjs`); a `git` subcommand not on a read
   allow-list counts as a write. The target repository is taken from `-C`, a `cd`, `--git-dir`,
   `--work-tree`, `GIT_DIR` and `GIT_WORK_TREE`. A subcommand that recurses into submodules
   (`submodule foreach|update`, `--recurse-submodules`) and `clean -ff` count as a write into every
   inside mount; a read with `-c` or `--config-env` counts as a write. `git-guard` takes the target
-  repository the same way.
+  repository the same way. Also judged (audit 4): a git call's output file or folder (`--output`,
+  `-o`, `--prefix`, `--separate-git-dir`, `config --file`) as a write target; redirections and git
+  outputs into the hook state folder, by real path; wrappers such as `strace` or `systemd-run`; a
+  program word that a command's own assignment sets; `~name` words where a path stands; brace groups;
+  and globs on a write route, expanded against the file system within a budget (a glob too wide to
+  expand is taken to name every mount below its folder).
 - **How a target path is judged** (here, in D04 and in D05). A path is resolved component by
   component, each symbolic link followed before the next `..` is applied, the last component
   included. Containment in a mount, an installation or the core is judged by the device and inode
   of the ancestors, or with the case checked where the file system folds case (drvfs under WSL keeps
   the case it is given). A file with more than one hard link is refused as a target. A tool writes
   through a temporary file in the target's own folder, renamed into place.
+- **Refinement: a hook that cannot decide (audit 5, D-HOOK-LOAD-FAILURE).** The hook entry point
+  `tools/hooks/host-hook.mjs` imports node builtins only. It runs the guard in a child process, killed
+  with its process group, and waits for it at most 20 s (`DEADLINE_MS`). Every wired oikos hook
+  carries an explicit timeout of 30 s (`HOOK_TIMEOUT_SECONDS`), so the dispatcher answers before the
+  host lets an action through past its timeout. When the guard cannot load, throws, crashes or misses
+  the deadline, the fallback rules decide for PreToolUse: shell tools are denied on privilege words
+  (sudo, doas, pkexec, su), on git write verbs and on a redirection other than to `/dev/null`,
+  `/dev/stdout` or `/dev/stderr`; file-write tools are denied; reads are allowed with a loud system
+  message. On a timeout, any shell command or file write is denied outright, and the command must be
+  split. Audit 6 (D-AUDIT6-FALLBACK): a guard child killed by a signal the dispatcher did not send is
+  treated like a timeout; for other failures the fallback strips quotes and backslashes before matching,
+  denies escalation words (`run0`, `sudoedit` among them), allows git only for a read subcommand on an
+  inline copy of git-guard's read list, and denies a program word that is a variable expansion.
+  A denial the guard printed before it failed stands. The dispatcher adds about 30 ms per hook
+  call. A changed wiring needs `sync` again in every installation.
+- **Refinement: the shell is protection, not a boundary (audit 6b, D-AUDIT6B-SHELL-MODEL).** The shell guard protects against mistakes and obvious forms, not a boundary: a program read from a file (`sh f.sh`, `node f.mjs`) is outside its reach, since no hook sees its text. The real boundary is an OS-level sandbox, open task A12.
 - **Rationale.** A mount has its own framework and guards (a branch per task, who commits), which
   run only in a session opened there. A per-mount write switch would make the installation's
   guards stand in for the mount's. A string comparison of paths lets a link, a `..` after a link or
@@ -101,9 +155,14 @@ this ADR.
   the vault, so no agent commit inside a mount needs a leak scan. The hooks see the file tools (the
   matcher `Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob` and its Qwen counterpart), shell
   redirections and `git`, and nothing else. Accepted gaps, task L5: other writing programs in the
-  shell (`cp`, `sed -i`, `python`, `node -e`, globs, `find -exec`; design Q4, task L2), MCP tools
-  (the matcher does not match `mcp__*`) and Codex sessions (no oikos guard is wired for Codex,
-  D03). The write guard shows that a dry run was printed and that the user had the word after it,
+  shell (`cp`, `sed -i`, `python`, `node -e`, `find -exec`; design Q4, task L2), the residuals of the
+  shell judgement (loop variables, `$(which git)` or `$G"t"` as the program, `eval cd …` and `cd "$(…)"`, `${VAR:-x}` defaults such as
+  `${TMPDIR:-/tmp}`, `tee`/`cp`/`mv`/`ln` into the hook state folder, git's own pathspec `*` crossing
+  `/`, and `NODE_OPTIONS` already in the host's environment, which node has no flag to ignore and whose
+  settings route `env` closes), the shell replacing, moving or removing the `oikos/` core link (`ln`, `mv`,
+  `rm`), shell writers over settings (`cp`, `sed -i`), `git -c <key>=<value>` values that write
+  (`core.pager="cat > file"`, audit 5, the comment in `tools/hooks/common.mjs`), a program the agent writes to a file and runs (`sh f.sh`, `node f.mjs`) or feeds to a shell through a pipe, `-s` or `<(…)`, shell writes of skill, agent and command files (D-AUDIT6B-SHELL-SKILLS), MCP tools (the matcher does not match `mcp__*`) and Codex sessions (no
+  oikos guard is wired for Codex, D03). The write guard shows that a dry run was printed and that the user had the word after it,
   not what they answered. The file tools and the `vault` tool are the main routes.
 
 ## D03 — `sync` wires each mount and records what it wrote
@@ -148,7 +207,7 @@ this ADR.
   `connectors:` line. It is never the default wiki connector, so a knowledge question still goes to
   the knowledge base first, and a request that names a vault or a note selects it. Verbs: `search`
   (all wikis or `--wiki <name>`, the wiki named per hit), `read`, `create` (from `wiki.template`,
-  frontmatter checked against `wiki.rules`, into `wiki.inbox`), `append`, `replace-section`;
+  frontmatter checked against the note rules, into `wiki.inbox`), `append`, `replace-section`;
   `--dry-run` as everywhere, the write verbs listed in `tools/hooks/writes.mjs`. Several wikis each
   have a `name`; `create` goes to the named one, else to the one with `default: true`, else asks.
 - **Where it writes.** `create` writes a `.md` note into `wiki.inbox` or a folder below the wiki's
@@ -160,7 +219,7 @@ this ADR.
 - **The check.** Every note, in a shared or a personal vault, goes through `outgoingFindings`:
   the note's path and name, its frontmatter, headings and body, template text included. The
   categories are `path`, `secret`, `term`, and `assistant` unless the mount sets
-  `mention_assistant: allow`; `language` is off unless `wiki.rules` sets a language. The terms are
+  `mention_assistant: allow`; `language` is off unless the note rules say English. The terms are
   the built-ins, the organization's terms in `.local/outgoing.yaml`, the installation's derived
   terms (its absolute root, this machine's home path and the names of `.local/` files; a short or
   common name is not a term, to keep the noise down) and the linked installations' terms (D05).
@@ -168,9 +227,9 @@ this ADR.
   them. The text is normalised before matching: NFKC, zero-width characters and emphasis markup
   removed, hyphenated and line-split words joined. The check also refuses executable or fetching
   content — a `dataviewjs` block, an inline `$=` query, a `<%` template tag, a `<script>` or
-  `<iframe>` element, an embed of a remote resource — unless `wiki.rules` allows that kind. A
+  `<iframe>` element, an embed of a remote resource — unless the note rules' `allow` lists that kind. A
   finding refuses the write with the places named.
-- **The override.** The one override of a finding is an `allow:` line of `.local/outgoing.yaml`,
+- **The override.** The one override of a finding is an `allow:` line of `.local/outgoing.yaml` (an executable-content finding has none: only the vault's note rules allow a kind),
   a file closed to the file tools (D01); the `vault` tool takes no `--allow-flagged`. An `allow:`
   entry that is empty or shorter than 8 characters (`MIN_ALLOW_LENGTH`,
   `tools/common/outgoing.mjs`) is a problem and is ignored, and a dry run lists every line an
@@ -202,7 +261,8 @@ this ADR.
 - **Choice.** An installation's root is its repository, the work that is versioned. `.local/` is
   never a repository: machine state, secrets, the person's local and private material; its stores
   stay there. Private material that must not meet the organization's lives in a separate,
-  personal installation.
+  personal installation. A linked installation registered as a mount needs a `.git` at its top like any
+  repository (D01), and a personal installation without a remote gets `git init` once.
 - **The boundary.** On in every installation, never declared, in every host oikos wires its guards
   for (Claude Code, Qwen Code; not Codex, D03). A path belongs to another installation when the
   nearest ancestor of its real path that `isInstallation` accepts (an `oikos.yaml`, or an `oikos/`
@@ -210,7 +270,7 @@ this ADR.
   says. A read there (the file tools, and shell reads through `shell.mjs`) is denied unless that
   installation is registered as a mount without `use`, in either layer, the local entry winning; a
   personal link goes in `.local/mounts.yaml`. A search whose scope is an ancestor of this
-  installation's root is denied unless it stays inside this installation's mounts. Any shell
+  installation's root is denied, with no exception for a mount. Any shell
   command that names a path in an unregistered installation is denied, whatever the program. A
   write into another installation is denied on every route D02 covers.
 - **Transfer.** Material moves between installations only through `setup transfer <file in a
@@ -242,7 +302,10 @@ this ADR.
   the transfer tool's own read and write are invisible to the hooks, so its source and destination
   rules carry everything.
 - **Consequences.** A hard link made earlier into another installation is not seen by the boundary
-  (an accepted gap). A script that reads another installation itself (`node`, `python`) is outside
+  (an accepted gap). A search of a folder above the installation is denied; a folder that holds another
+  installation and is not above this one is searched without that installation being found beyond the
+  nested search (D01), and `list_directory` of a parent folder lists names (task L6). A script that reads
+  another installation itself (`node`, `python`) is outside
   the hooks (D02, task L5). The source can change between the dry run and the real run, as in D04
   (task L4).
 - **Reconsider if** a separate personal installation leaves a gap the owner cannot close; then the

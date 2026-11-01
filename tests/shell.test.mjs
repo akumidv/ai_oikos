@@ -8,7 +8,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { shellSegments } from '../tools/hooks/common.mjs';
 import { realOf } from '../tools/common/paths.mjs';
-import { assignedVars, dirsAlong, gitCalls, gitPlaces, gitPlacesAll, plainCommand, plainText, quotedSubstitutions, real, redirectionTargets, shellSyntax, workingDirs, withoutRedirections, withVariables } from '../tools/hooks/shell.mjs';
+import { assignedVars, braceForms, dirsAlong, gitCalls, gitPlaces, gitPlacesAll, globMatches, globPlaces, inputRedirections, mergedVars, newBudget, plainCommand, plainText, quotedSubstitutions, real, redirectionTargets, shellSyntax, workingDirs, withoutRedirections, withProgramVariables, withVariables } from '../tools/hooks/shell.mjs';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'shell-test-'));
 after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -234,4 +234,125 @@ test('quotedSubstitutions: the commands inside $(…) and backticks in double qu
   assert.deepEqual(quotedSubstitutions('echo plain'), []);
   assert.deepEqual(redirectionTargets('echo "$(echo x > f1)" > f2').map((r) => r.target), ['f2', 'f1']);
   assert.ok(redirectionTargets('echo "$(echo "`echo x > f1`")"').some((r) => r.target === 'f1'), 'a backtick inside a substitution inside quotes');
+});
+
+test('braceForms: every group, nested and repeated ones too, at most the limit; a brace that is no group stays text', () => {
+  assert.deepEqual(braceForms('{../other,x}/f'), ['../other/f', 'x/f']);
+  assert.deepEqual(braceForms('a{b,c}d{e,f}'), ['abde', 'abdf', 'acde', 'acdf']);
+  assert.deepEqual(braceForms('{a,{b,c}}/x'), ['a/x', 'b/x', 'c/x']);
+  assert.deepEqual(braceForms('{x,}/f'), ['x/f', '/f']);
+  assert.deepEqual(braceForms('{a}'), ['{a}']);
+  assert.deepEqual(braceForms('{}'), ['{}']);
+  assert.deepEqual(braceForms('${HOME}/{a,b}'), ['${HOME}/a', '${HOME}/b']);
+  assert.deepEqual(braceForms('{a,b'), ['{a,b']);
+  assert.deepEqual(braceForms('plain'), ['plain']);
+  assert.equal(braceForms(Array.from({ length: 30 }, () => '{a,b}').join('')), null, 'thirty groups are 2^30 forms: more than the cap, so none is listed and the caller judges the word as too wide');
+  assert.equal(braceForms('{a,b,c}{d,e,f}', 4), null);
+  assert.deepEqual(braceForms('va{u..u}lt'), ['vault']);
+  assert.deepEqual(braceForms('{1..3}'), ['1', '2', '3']);
+  assert.deepEqual(braceForms('{a..c}x'), ['ax', 'bx', 'cx']);
+  assert.deepEqual(braceForms('{01..03}'), ['01', '02', '03']);
+  assert.deepEqual(braceForms('{3..1}'), ['3', '2', '1']);
+  assert.equal(braceForms('{1..100000}'), null, 'a long sequence is not listed');
+  assert.equal(braceForms(`{${','.repeat(70)}vault}`), null, 'a group past the cap is not listed');
+});
+
+test('withVariables: a brace group follows the word as written with the words it stands for; $TMPDIR is the temporary folder unless the command sets it', () => {
+  assert.deepEqual(withVariables('{a,b}/x', new Map(), '/p'), ['{a,b}/x', 'a/x', 'b/x']);
+  assert.deepEqual(withVariables('$V/{a,b}', new Map([['V', ['d']]]), '/p'), ['d/{a,b}', 'd/a', 'd/b']);
+  assert.deepEqual(withVariables('${HOME:-x}', new Map(), '/p'), ['${HOME:-x}']);
+  assert.deepEqual(withVariables('$TMPDIR/x', new Map(), '/p'), [`${tmpdir()}/x`]);
+  assert.deepEqual(withVariables('$TMPDIR/x', new Map([['TMPDIR', ['/t']]]), '/p'), ['/t/x']);
+});
+
+test('globMatches: * ? [..] [!..] match as the shell does, case-blind and with a leading dot like any character; no backtracking blow-up', () => {
+  for (const [pattern, name] of [['vau*', 'vault'], ['v?ult', 'vault'], ['v[a-b]ult', 'vault'], ['v[!b]ult', 'vault'], ['*', '.hidden'], ['*ult', 'VAULT'], ['a*b*c', 'aXbYc'], ['[]]x', ']x'], ['a[', 'a['], ['**', 'x'], ['v[[:alpha:]]ult', 'vault']]) {
+    assert.equal(globMatches(pattern, name), true, `${pattern} ~ ${name}`);
+  }
+  for (const [pattern, name] of [['vau*', 'wault'], ['v?ult', 'vlt'], ['v[b-c]ult', 'vault'], ['v[!a]ult', 'vault'], ['a*b*c', 'aXbY'], ['', 'x']]) {
+    assert.equal(globMatches(pattern, name), false, `${pattern} !~ ${name}`);
+  }
+  const started = Date.now();
+  assert.equal(globMatches(`${'*a'.repeat(40)}b`, 'a'.repeat(200)), false);
+  assert.ok(Date.now() - started < 500, `${Date.now() - started} ms`);
+});
+
+test('globPlaces: a glob is expanded against the file system, a link followed, what is not there yet carried along; a wide one is cut short', () => {
+  const here = realpathSync(ROOT);
+  mkdirSync(join(here, 'g', 'vault', 'inbox'), { recursive: true });
+  mkdirSync(join(here, 'g', 'other'), { recursive: true });
+  symlinkSync(join(here, 'g', 'vault'), join(here, 'g', 'lnk'), 'dir');
+  assert.deepEqual(globPlaces('g/vau*/inbox/n.md', ROOT).places, [join(here, 'g', 'vault', 'inbox', 'n.md')]);
+  assert.deepEqual(globPlaces('g/v?ult', ROOT).places, [join(here, 'g', 'vault')]);
+  assert.deepEqual(globPlaces('g/l*/inbox', ROOT).places, [join(here, 'g', 'vault', 'inbox')], 'a link a component matches is followed');
+  assert.deepEqual(globPlaces(`${here}/g/*`, '/nowhere').places.sort(), [join(here, 'g', 'other'), join(here, 'g', 'vault')], 'an absolute word ignores the folder it is read from');
+  assert.deepEqual(globPlaces('g/nothing*/x', ROOT), { places: [], complete: true });
+  assert.ok(globPlaces('g/**/inbox', ROOT).places.includes(join(here, 'g', 'vault', 'inbox')), '** is any number of folders');
+  for (let i = 0; i < 70; i++) mkdirSync(join(here, 'wide', `d${i}`), { recursive: true });
+  assert.equal(globPlaces('wide/*/*/x', ROOT).complete, false, 'more folders than the budget');
+  assert.equal(globPlaces('wide/d1*/x', ROOT).complete, true);
+});
+
+test('withProgramVariables: a program that is a variable the command sets is read as its value, the best-scored one when it has several', () => {
+  const read = (command) => {
+    const segments = shellSegments(command);
+    return withProgramVariables(segments, assignedVars(segments), (exe) => (exe === 'git' ? 2 : exe === 'ls' ? 1 : 0)).map((segment) => segment.exe);
+  };
+  assert.deepEqual(read('G=git; $G status'), [null, 'git']);
+  assert.deepEqual(read('G=git; ${G} status'), [null, 'git']);
+  assert.equal(read('G="timeout 5 git -C x"; $G status').at(-1), 'git');
+  assert.equal(read('G=ls; G=git; $G status').at(-1), 'git');
+  assert.equal(read('G=git; G=ls; $G status').at(-1), 'git');
+  assert.equal(read('G=cat; $G x').at(-1), '$G', 'a program the score does not want leaves the segment as it is');
+  assert.equal(read('$G status').at(-1), '$G');
+  const segments = shellSegments('G="git -C x"; $G commit');
+  assert.deepEqual(withProgramVariables(segments, assignedVars(segments), () => 1).at(-1).args, ['-C', 'x', 'commit']);
+});
+
+test('shellSegments: strace, ltrace, setarch, unshare, prlimit, nsenter, firejail and systemd-run run the command after their options', () => {
+  const exe = (command) => shellSegments(command)[0].exe;
+  assert.equal(exe('strace -f -o /dev/null -e trace=file -s 100 git status'), 'git');
+  assert.equal(exe('strace --output=x --trace=file git status'), 'git');
+  assert.equal(exe('ltrace -f -o x git status'), 'git');
+  assert.equal(exe('setarch x86_64 git status'), 'git');
+  assert.equal(exe('setarch x86_64 -R git status'), 'git');
+  assert.equal(exe('unshare -r -m --propagation private git status'), 'git');
+  assert.equal(exe('prlimit --nofile=100 --cpu=5 git status'), 'git');
+  assert.equal(exe('nsenter -t 1 -m -p git status'), 'git');
+  assert.equal(exe('firejail --net=none -- git status'), 'git');
+  assert.equal(exe('systemd-run --user -p MemoryMax=1G --unit x git status'), 'git');
+  assert.equal(exe('/usr/bin/strace -f git status'), 'git');
+  assert.equal(exe('strace -f setarch x86_64 unshare -r git status'), 'git');
+  assert.equal(exe('strace'), null, 'nothing to run');
+});
+
+test('dirsAlong: a cd that may lead to several folders leaves the command in each (`nows`), and a later relative cd is read from each', () => {
+  mkdirSync(join(ROOT, 'p', 'x'), { recursive: true });
+  mkdirSync(join(ROOT, 'q', 'x'), { recursive: true });
+  const { nows, dirs } = dirsAlong(shellSegments('cd {p,q}; cd x; cd ..'), ROOT);
+  assert.deepEqual(nows[1], [join(ROOT, 'p'), join(ROOT, 'q')]);
+  assert.deepEqual(nows[2], [join(ROOT, 'p', 'x'), join(ROOT, 'q', 'x')]);
+  assert.ok(dirs.includes(join(ROOT, 'q', 'x')));
+  const homes = dirsAlong(shellSegments(`HOME=${join(ROOT, 'p')}; cd; cd x`), ROOT);
+  assert.ok(homes.nows[2].includes(join(ROOT, 'p')) && homes.nows[2].includes(homedir()), 'an assigned HOME and the real one');
+  assert.ok(homes.dirs.includes(join(ROOT, 'p', 'x')));
+  const spent = newBudget();
+  spent.steps = 1;
+  assert.ok(dirsAlong(shellSegments('cd a; cd b; cd c'), ROOT, spent).wide.includes('/'), 'what is past the budget may be anywhere');
+});
+
+test('assignedVars: NAME+= makes the variable one that cannot be told; a ~ in a value is read with every HOME the command may have', () => {
+  const vars = assignedVars(shellSegments('HOME=/h; A=x; A+=y; B=~/b'));
+  assert.ok(vars.get('A').some((value) => value.includes('$')), 'an appended variable keeps an expansion left over');
+  assert.deepEqual(vars.get('B'), ['/h/b', join(homedir(), 'b')]);
+  assert.deepEqual(vars.get('HOME'), ['/h']);
+  assert.deepEqual([...mergedVars(new Map([['A', ['1']]]), new Map([['A', ['2']], ['B', ['3']]]))], [['A', ['1', '2']], ['B', ['3']]]);
+});
+
+test('inputRedirections: the text of each here-string, and whether anything else is read; a process substitution is neither', () => {
+  assert.deepEqual(inputRedirections('bash <<< "cd x; ls"'), { here: ['cd x; ls'], other: false });
+  assert.deepEqual(inputRedirections('bash < f.sh'), { here: [], other: true });
+  assert.deepEqual(inputRedirections('bash <<EOF\nx\nEOF'), { here: [], other: true });
+  assert.deepEqual(inputRedirections('bash <(echo x)'), { here: [], other: false });
+  assert.deepEqual(inputRedirections('echo x | bash'), { here: [], other: false });
 });

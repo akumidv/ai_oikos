@@ -117,7 +117,7 @@ export function unjudgeablePath(payload) {
   const input = payload.tool_input || {};
   const named = [input.file_path, input.notebook_path, input.path, input.filePath, input.callHierarchyItem?.uri];
   if (Array.isArray(input.edits)) named.push(...input.edits.map((edit) => edit?.file_path));
-  if (has(GLOB_TOOLS, payload)) named.push(input.pattern);
+  if (has(GLOB_TOOLS, payload) && typeof input.pattern === 'string') named.push(input.pattern, ...braceAlternatives(input.pattern.trim()));
   return named.find(isUserHome);
 }
 
@@ -137,7 +137,8 @@ export function searchScopes(payload, cwd) {
   if (!scopes.length) scopes.push(base);
   const named = [...scopes];
   if (has(GLOB_TOOLS, payload)) {
-    for (const pattern of pathForms(input.pattern).flatMap((text) => braceAlternatives(text))) {
+    // The braces first, then `~` in each alternative: `{~/other,x}` holds a path the hosts expand after it is split.
+    for (const pattern of pathForms(input.pattern).flatMap((text) => braceAlternatives(text)).map(homed)) {
       const prefix = globPrefix(pattern);
       if (prefix.startsWith('/')) named.push(prefix);
       else if (prefix) named.push(...scopes.map((scope) => `${scope}/${prefix}`));

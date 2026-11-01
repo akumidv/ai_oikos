@@ -8,24 +8,26 @@
 // {@link boundaryOf}, and pass the result down.
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { CORE_ROOT, idOf, isInstallation, isWithin, realOf } from '../common/paths.mjs';
+import { CORE_ROOT, INSTALL_FILE, idOf, isInstallation, isWithin, realOf } from '../common/paths.mjs';
 import { config } from '../common/config.mjs';
-import { problemsOf } from '../common/mounts.mjs';
+import { LOCAL_MOUNTS_FILE, declaredMountKeys, guardedRoots, problemsOf } from '../common/mounts.mjs';
 
 /**
  * The mounts a guard keeps closed (D01: a problem never opens a guard): the configured ones; the roots
  * of the entries of `mounts:` that are not mounts — a bad path, a value that is no mapping, a path under
  * `oikos/`, a path declared twice — and of the keys of a file that does not parse (`config().guarded`);
- * and the roots recorded in `.local/sync.json`. Each root once; only a configured mount has a `use`, and `flawed` says the resolution reports a problem for it.
+ * and the roots recorded in `.local/sync.json`. When the configuration cannot be resolved at all (D02), the paths both mounts files name stand in for `config().guarded`, and no configured mount opens a read. Each root once; only a configured mount has a `use`, and `flawed` says the resolution reports a problem for it.
  */
 export function guardedMounts(install) {
   let mounts = [];
-  let dropped = [];
+  let dropped;
   try {
     const { mounts: resolved, guarded = [], problems = [] } = config();
     mounts = resolved.map((m) => ({ ...m, flawed: problemsOf(m, problems).length > 0 }));
     dropped = guarded;
-  } catch { /* an unreadable configuration: the recorded roots still guard */ }
+  } catch {
+    dropped = declaredRoots(install); // the configuration cannot be resolved (D02): what both files name stays guarded, and nothing opens a read
+  }
   let recorded = {};
   try {
     recorded = JSON.parse(readFileSync(resolve(install, '.local', 'sync.json'), 'utf8')).mounts ?? {};
@@ -36,6 +38,17 @@ export function guardedMounts(install) {
     if (!guarded.some((m) => m.root === root)) guarded.push({ path, root });
   }
   return guarded;
+}
+
+/** The roots both mounts files name under `mounts:`, `{ path, layer, root }` each, found without resolving the configuration; a file that cannot be read names none. */
+function declaredRoots(install) {
+  return [['shared', resolve(install, INSTALL_FILE)], ['local', resolve(install, '.local', LOCAL_MOUNTS_FILE)]].flatMap(([layer, file]) => {
+    try {
+      return guardedRoots(install, declaredMountKeys(readFileSync(file, 'utf8')), layer);
+    } catch {
+      return [];
+    }
+  });
 }
 
 /**

@@ -172,18 +172,39 @@ function logicalCwd() {
   return pwd && real(pwd) === real(cwd) ? pwd : cwd;
 }
 
+/** The host variables that name the project folder of a session, in the order they are tried. */
+const PROJECT_VARS = ['CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR'];
+
 /**
  * { root, via } — the installation oikos works for and how it was found, or { root: null, problem }.
  * `env` and `cwd` are for tests; the result for the process itself is cached by installRoot().
+ *
+ * The CLI tools and the MCP servers take `OIKOS_HOME` first. A hook process (`hook`) takes the host's
+ * project folder first, and `OIKOS_HOME` only when that is no installation: a hook reads the environment a
+ * settings file's `env` key may have set, so the variable cannot be what decides which installation the
+ * guards protect. A hook whose `OIKOS_HOME` is no installation, with no installation among the project
+ * folders, comes back as `{ root: null, problem, brokenHome: true }` — the guards must not read that as
+ * "nothing to check" — unless the host's project folder is the core repository (development), whatever
+ * folder the hook process runs in.
  */
-export function locateInstallation({ env = process.env, cwd } = {}) {
+export function locateInstallation({ env = process.env, cwd, hook = false } = {}) {
+  if (hook) {
+    for (const name of PROJECT_VARS) {
+      if (env[name] && isInstallation(env[name])) return { root: resolve(env[name]), via: name };
+    }
+  }
   if (env.OIKOS_HOME) {
     const dir = resolve(env.OIKOS_HOME);
-    return isInstallation(dir)
-      ? { root: dir, via: 'OIKOS_HOME' }
-      : { root: null, problem: `OIKOS_HOME=${env.OIKOS_HOME} is not an oikos installation (no ${INSTALL_FILE}, no oikos/ link)` };
+    if (isInstallation(dir)) return { root: dir, via: 'OIKOS_HOME' };
+    // Development is the host's project folder being the core: never where the hook process happens to run.
+    const development = hook && PROJECT_VARS.some((name) => env[name] && isCore(env[name]));
+    return {
+      root: null,
+      problem: `OIKOS_HOME=${env.OIKOS_HOME} is not an oikos installation (no ${INSTALL_FILE}, no oikos/ link)`,
+      ...(hook && !development ? { brokenHome: true } : {}),
+    };
   }
-  for (const name of ['CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR']) {
+  for (const name of PROJECT_VARS) {
     if (env[name] && isInstallation(env[name])) return { root: resolve(env[name]), via: name };
   }
   const starts = cwd ? [cwd] : [env.INIT_CWD, logicalCwd()].filter(Boolean);
@@ -203,6 +224,17 @@ let located;
 export function installRoot() {
   located ??= locateInstallation();
   return located.root;
+}
+
+let hooked;
+/**
+ * {@link locateInstallation} for a hook process, cached: the installation the guards protect and, when
+ * `OIKOS_HOME` is set and leads to none (`brokenHome`), the problem. Every guard entry goes through this,
+ * never through {@link installRoot}.
+ */
+export function hookInstallation() {
+  hooked ??= locateInstallation({ hook: true });
+  return hooked;
 }
 
 /** Why there is no installation, or null when there is one. */

