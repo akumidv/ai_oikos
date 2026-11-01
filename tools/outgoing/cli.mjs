@@ -5,7 +5,7 @@
 // (common/outgoing.mjs). Read-only: it sends nothing, so it has no --dry-run.
 import { readFileSync } from 'node:fs';
 import { runCli, printJson, UsageError } from '../common/cli.mjs';
-import { checkLines, checkOutgoing, maskSecret, outgoingRules } from '../common/outgoing.mjs';
+import { checkLines, checkOutgoing, maskSecret, maskedLine, outgoingRules } from '../common/outgoing.mjs';
 
 const commands = {
   check: {
@@ -21,6 +21,9 @@ const commands = {
             line: f.line, category: f.category, match: f.category === 'secret' ? maskSecret(f.match) : f.match,
           })),
           allowed: check.allowed,
+          // an entry that holds a secret is masked like the finding itself
+          passes: check.passes.map(({ pass }) => ({ line: pass.line, entry: maskedLine(pass.entry) })),
+          problems: check.problems,
         });
       } else {
         const lines = checkLines(check);

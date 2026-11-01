@@ -17,7 +17,7 @@ function layerOf(v) {
   return v.shared ? 'shared' : 'local';
 }
 
-const ENTRY_OPTIONS = ['use', 'skills-only', 'prefix', 'wiki-name', 'commit-pointers'];
+const ENTRY_OPTIONS = ['use', 'skills-only', 'prefix', 'wiki-name', 'tracked-pointers'];
 
 /** The change `verb` asks for on the mount `path`. */
 function changeOf(verb, path, v) {
@@ -25,7 +25,7 @@ function changeOf(verb, path, v) {
     if (ENTRY_OPTIONS.some((option) => v[option] !== undefined)) throw new UsageError('mount remove takes only the path and the layer');
     return { remove: path };
   }
-  const entry = mountEntry({ use: list(v.use), only: list(v['skills-only']), prefix: v.prefix, wikiName: v['wiki-name'], commit: v['commit-pointers'] });
+  const entry = mountEntry({ use: list(v.use), only: list(v['skills-only']), prefix: v.prefix, wikiName: v['wiki-name'], tracked: v['tracked-pointers'] });
   return { add: { path, entry } };
 }
 
@@ -51,7 +51,9 @@ function runMount(v, positionals) {
     return 0;
   }
   writeFileAtomic(result.after, result.file);
-  console.log(`wrote ${result.label}. Next: \`node oikos/tools/sync/cli.mjs\` wires the mount.`);
+  console.log(verb === 'remove'
+    ? `wrote ${result.label}. Next: \`node oikos/tools/sync/cli.mjs\` reports the wiring the mount keeps; \`node oikos/tools/sync/cli.mjs --prune --dry-run\` shows what taking it away would change.`
+    : `wrote ${result.label}. Next: \`node oikos/tools/sync/cli.mjs\` wires the mount.`);
   return 0;
 }
 
@@ -59,11 +61,11 @@ function runMount(v, positionals) {
 export const mountCommand = {
   help: 'add or remove a mount (another repository the installation uses as a source of notes or skills): add|remove <path> '
     + '(--personal = .local/mounts.yaml, --shared = the mounts: part of oikos.yaml; --use wiki,skills; --skills-only a,b; --prefix P; '
-    + '--wiki-name N; --commit-pointers: personal entry of an inside mount only, its skill pointers may be committed; --dry-run shows the diff and writes nothing); '
+    + '--wiki-name N; --tracked-pointers: personal entry of an inside mount only, its skill pointers may be committed; --dry-run shows the diff and writes nothing); '
     + 'a change that would bring a problem is refused',
   options: {
     personal: { type: 'boolean' }, shared: { type: 'boolean' }, use: { type: 'string' }, 'skills-only': { type: 'string' },
-    prefix: { type: 'string' }, 'wiki-name': { type: 'string' }, 'commit-pointers': { type: 'boolean' }, 'dry-run': { type: 'boolean' },
+    prefix: { type: 'string' }, 'wiki-name': { type: 'string' }, 'tracked-pointers': { type: 'boolean' }, 'dry-run': { type: 'boolean' },
   },
   run: runMount,
 };

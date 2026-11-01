@@ -124,12 +124,18 @@ with `flagged: content check:`; the real run refuses with exit 3 and `refused: c
 Fix the text; when a finding is meant (a path the reader needs), show it to the user and, once
 they agree, add `--allow-flagged` to both the dry run and the write (`--allow-non-english` covers
 non-English text only; Greek letters in a formula are not flagged). A secret is never posted: the flag does not cover it. A line the
-installation always lets through goes under `allow:` in `.local/outgoing.yaml` (literal strings; a
-secret passes only an entry that contains the secret itself).
+installation always lets through goes under `allow:` in `.local/outgoing.yaml` (literal strings of at
+least 8 characters — a shorter or empty one is reported and ignored; a secret passes only an entry
+that contains the secret itself). The dry run lists every line an `allow:` entry let pass, with the
+entry; the user edits that file in their own editor, a file tool does not change it.
 What an image, an office file or a PDF carries is not read — look at it before attaching. Routes
-no tool writes — the messenger, a mail draft, a form in the shared browser, a vault note to be
-shared — follow the same rule: run the draft through `node oikos/tools/outgoing/cli.mjs check
---text "…"` (or `--file`), read-only, before showing it for confirmation.
+no tool writes — the messenger, a mail draft, a form in the shared browser — follow the same
+rule: run the draft through `node oikos/tools/outgoing/cli.mjs check --text "…"` (or `--file`),
+read-only, before showing it for confirmation. A note in a vault (a `use: wiki` mount) is not on
+that list: it is written by the `vault` connector of the `wiki` skill, which runs the same check
+itself, in a shared and a personal vault alike, with the vault's own rules, and also refuses
+executable content (`dataviewjs`, `<script>`, remote embeds, …). It has **no `--allow-flagged`**:
+the only way past a finding is an `allow:` line the user writes in `.local/outgoing.yaml`.
 
 **Sign-in.** Web resources usually sign in through the organization's SSO. The agent never
 types passwords or MFA codes; the person signs in — in claude.ai for a connector, or in the
@@ -173,7 +179,9 @@ outside the default permission mode denies, so the user runs it with `! git push
 ## Documents
 
 1. The final document goes where the installation's `AGENTS.md` says (a vault's inbox, a folder),
-   never into `.local/`; a draft goes there too, or, if the user keeps working on it, into a
+   never into `.local/`; a markdown note for a vault that is a wiki mount goes in through the
+   `vault` connector (`wiki` skill) — the file tools do not write into a mount; a draft goes
+   there too, or, if the user keeps working on it, into a
    working folder in `.local/` (any name not starting with `.`); throwaway intermediate files go
    to the session scratchpad. None goes into oikos or the installation's own files.
 2. Facts come from the knowledge base (above).

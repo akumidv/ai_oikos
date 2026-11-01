@@ -18,18 +18,18 @@ const trimmed = (path) => (path.length > 1 ? path.replace(/\/+$/, '') : path);
 
 /**
  * The entry of a new mount from what `setup mount add` was given: `use` (a list of MOUNT_USES), and
- * `skills` (`only`, `prefix`, `commit`) and `wiki` (`name`) blocks when asked for. A read-only mount (no
+ * `skills` (`only`, `prefix`, `tracked`) and `wiki` (`name`) blocks when asked for. A read-only mount (no
  * use) is null. An option for a use the mount does not have is a usage error.
- * @param {{use?: string[], only?: string[], prefix?: string, wikiName?: string, commit?: boolean}} spec
+ * @param {{use?: string[], only?: string[], prefix?: string, wikiName?: string, tracked?: boolean}} spec
  * @returns {object|null}
  */
-export function mountEntry({ use = [], only, prefix, wikiName, commit }) {
+export function mountEntry({ use = [], only, prefix, wikiName, tracked }) {
   for (const name of use) if (!MOUNT_USES.includes(name)) throw new UsageError(`--use ${name}: one of ${MOUNT_USES.join(', ')}`);
   const blocks = {
-    skills: present({ prefix, only, commit }),
+    skills: present({ prefix, only, tracked }),
     wiki: present({ name: wikiName }),
   };
-  const options = { skills: '--skills-only, --prefix and --commit-pointers belong to a mount used for skills', wiki: '--wiki-name belongs to a mount used as a wiki' };
+  const options = { skills: '--skills-only, --prefix and --tracked-pointers belong to a mount used for skills', wiki: '--wiki-name belongs to a mount used as a wiki' };
   for (const [name, block] of Object.entries(blocks)) if (block && !use.includes(name)) throw new UsageError(`${options[name]}: add --use ${name}`);
   return use.length ? { use, ...Object.fromEntries(Object.entries(blocks).filter(([, block]) => block)) } : null;
 }

@@ -106,6 +106,22 @@ run from an installation or with `OIKOS_HOME`.
   "limited earlier" note per host. A rate limit is kept per quota across a batch for the pool and
   extended search as for the commit search (GitHub GraphQL, REST search and REST core apart). Left: GitLab live; the installation's config moved to the new keys (by the owner, in the
   installation); commit.
+- T6 · `jira move`: issues to another project · active · Bulk move by keys or JQL — preview, owner's yes, poll, old→new keys
+  — Jira Cloud `POST /rest/api/3/bulk/issues/move` + `GET /rest/api/3/bulk/queue/{taskId}` (public
+  v3 spec, "an early version … no full parity with the Bulk Move UI"; ≤1000 issues incl. subtasks;
+  one target project per request; epics and their children in separate requests, the children with
+  the epic as target parent; subtasks follow with `inferSubtaskTypeDefault`; failures per issue in
+  `failedAccessibleIssues`). Read-only probe on a live Cloud site: the bulk queue answers (404 "task
+  could not be found", not a missing route), Bulk change / Move / Create permissions held. No REST
+  move on Data Center. Step 1 (research) done; step 2 design shown to the owner. Open decisions:
+  D-T6-NAME (verb name: `move` or `move-to-project`, beside `move-to-sprint` and "move" = transition
+  in the skill), D-T6-CONFIRM (preview by default + `--yes`, which needs a write-guard change, or the
+  tools' `--dry-run` convention), D-T6-HIERARCHY (epic + children in two phases; a child whose epic
+  stays behind), D-T6-NOTIFY (`sendBulkNotification` off by default), D-T6-SANDBOX (throwaway
+  projects for the live check). Unconfirmed until the sandbox run: team-managed → company-managed
+  through the API, a parent kept for a non-subtask, sprint/version/component loss, JQL and
+  `GET /issue/<old key>` on an old key. Also: bare task numbers bound to a project (D11
+  `number_repos`) do not follow a moved key — the installation's config needs the new project.
 - L1 · `.local/` dot stores closed, the rest open · active · Guard by dot name, `.secrets/` `.browser/`, lazy migration
   — [ADR 0002](../docs/adr/0002-local-stores.md) D01–D04, [design](../docs/design/local-stores.md).
   Done in code (guard by name, `localStorePath` fallback, `moveLocalStores` in sync), tests green.
@@ -120,6 +136,14 @@ run from an installation or with `OIKOS_HOME`.
   a runtime check in the shared HTTP clients (a non-GET outside a tool entry point asks), or deny
   `node -e`/an unlisted script that imports `tools/*/` clients; a source scan alone is not enough.
   Raised in T5 (a side agent's note); the owner decides the route before code.
+- L4 · Guard: content drift between dry run and real run · deferred · The real run refuses text that differs from its dry run's
+  — accepted gap (re-audit F12): the write guard binds the command's tokens, not the text, so a `--file` body, a
+  vault note or a transfer source can change after the dry run; a hash of the checked text in the write-guard
+  state would close it — [ADR 0007](../docs/adr/0007-mounts.md) D04, D05, [ADR 0003](../docs/adr/0003-outward-content.md) D03.
+- L5 · Guard: writers outside the hooks · deferred · MCP tools, Codex sessions and other shell writers meet the guards
+  — accepted gap (re-audit): the file matcher does not match `mcp__*`; no oikos guard is wired for Codex
+  (`.codex/hooks.json` holds akmon's only); `cp`, `sed -i`, `python`, `node -e` writing into a mount, another
+  installation or a closed file pass the shell guard (see L2, L3) — [ADR 0007](../docs/adr/0007-mounts.md) D02, D03, D05.
 - F8 · Extension rules from the installation · active · No app or block names in the core's extension
   — the owner's choice: `oikos.yaml` `browser_helpers` (per site: optional hosts, helpers with
   `hide`/`open` titles); `sync` builds the extension into `.local/extension/` (core code, a
@@ -161,8 +185,11 @@ run from an installation or with `OIKOS_HOME`.
 - A9 · Mounts in the core · active · Mounts give skills and notes, never rules; leaks guarded both ways
   — [design](../docs/design/mounts.md); every `D-A9-*` decided (2026-10-28): shared + `.local/mounts.yaml` with the local entry winning,
   outside mounts, vault migrated, helper, leak check through `outgoingFindings`, `mention_assistant` per mount, `vault` derived from
-  `use: wiki`, an installation writes only into itself (notes through `vault` only), `skills.only`; next: ADR 0007, then the trunk slice
-  S1 (config, sync wiring items 1–3, file-tool write guard over every mount); A5, A11 and the desk's phase 3 wait on it
+  `use: wiki`, an installation writes only into itself (notes through `vault` only), `skills.only`. [ADR 0007](../docs/adr/0007-mounts.md)
+  accepted, with both audits' fixes and decisions in. Built, uncommitted: S1, S2, S3, `setup mount
+  add|remove`, D-A9-GUARD-FILES (closed guard files and settings keys, listed `allow:` passes, short entries ignored, `sync --prune`),
+  D-S3-PREFIX, `skills.tracked`. Next: S6 (`vault`), S4 (shell and `git`, F10, F15), then S5, S7, S8, the gate; gaps L4, L5;
+  A5, A11 and the desk's phase 3 wait on it
 - A10 · akmon in installations · active · Authoring agents and skills in an installation under akmon, attached softly for non-developers
   — [design](../docs/design/akmon-in-installations.md) drafted: the `guided` actor of akmon's actor work, the core's pinned akmon, oikos `sync`
   as the one writer, on demand; every `D-A10-*` decided as recommended (2026-10-28); next: the owner runs the akmon prompt in the design's
@@ -170,8 +197,9 @@ run from an installation or with `OIKOS_HOME`.
 - A11 · Work and personal kept apart · active · No leak either way between an organization's installation and a personal one
   — [design](../docs/design/mounts.md) § Linked installations; decided (2026-10-28): the root is the work repository, `.local/` never is
   and its stores stay; another installation is read only when registered as a mount (shared or `.local/`, local wins); the boundary guard
-  always on; an installation changes only itself; data crosses only by `setup transfer`, run in the receiving installation with the
-  direction's leak check; scopes inside one `.local/` rejected. Slices B1–B4 after A9 S1 and S2. The handoff's move findings are in A9
+  always on; an installation changes only itself; data crosses only by `setup transfer`, run in the receiving installation, checked
+  with both installations' terms, a finding refuses, text sources only ([ADR 0007](../docs/adr/0007-mounts.md) D05); every
+  outgoing check also takes the linked installations' terms; scopes inside one `.local/` rejected. Slices B1–B4 after A9 S1 and S2. The handoff's move findings are in A9
   (slice S5) and P3-5
 - P1-5 · `oikos/` as a pinned submodule · active · One way to link the core into every installation, instead of a symlink
   — not designed yet: a public-url submodule pinned to a commit, a `local` remote on this machine's core checkout (push off), objects

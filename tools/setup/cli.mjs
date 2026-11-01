@@ -231,6 +231,10 @@ const commands = {
         const vault = local['obsidian vault'];
         const memory = local['personal memory'];
         if (vault) row(existsSync(vault), 'vault clone', vault);
+        // The line is what notes used to be read from; a vault is a personal wiki mount now (ADR 0007 D04).
+        if (vault && !conf.mounts.some((m) => m.root === realOf(vault))) {
+          console.log(`  --  the \`obsidian vault:\` line of .local/AGENTS.md is replaced by a personal wiki mount, which the vault connector uses: node oikos/tools/setup/cli.mjs mount add ${vault} --use wiki --personal --dry-run`);
+        }
         if (memory) row(existsSync(memory), 'personal memory note', memory);
       }
       { const mcp = existsSync(join(dir, '.mcp.json')); row(mcp, '.mcp.json', mcp ? '' : 'run `node oikos/tools/sync/cli.mjs`'); }

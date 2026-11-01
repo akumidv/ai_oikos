@@ -7,69 +7,182 @@
 //
 // What counts is where a path really is: `oikos/skills/x.md` and the core's absolute path are the
 // same file. node_modules stays free (npm owns it). Best effort against accidents: shell commands
-// writing files are not looked into.
+// writing files are not looked into here (git-guard judges them, mount-shell.mjs).
 //
 // The same holds for every mount (docs/design/mounts.md): an installation writes only into itself,
 // so a file tool does not change a path inside a mount — a wiki mount included — and the message
 // says where to open a session instead. Reads stay open. Mounts come from config(), read per call,
 // together with the roots `sync` recorded in `.local/sync.json`: a mount removed from the configuration
-// stays closed until sync has taken its wiring away, and an unreadable configuration closes nothing less.
-// The files that declare the mounts are closed too, as far as they declare them (mounts-lock.mjs).
-import { readFileSync, realpathSync } from 'node:fs';
-import { relative, resolve, isAbsolute } from 'node:path';
+// stays closed until `sync --prune` has taken its wiring away (plain sync keeps it), and an unreadable
+// configuration closes nothing less. The files the protection depends on are closed too, as far as they
+// matter (mounts-lock.mjs).
+//
+// The boundary between installations (ADR 0007 D05, boundary.mjs): a search tool (Grep, Glob) whose
+// scope is a folder above the installation is denied — it would reach every installation beside this
+// one — and so is a read, a search or a listing of a path of another installation, unless that
+// installation is registered as a mount without `use` (one definition, foreignInstallation); a write
+// into another installation is denied whether it is registered or not. A check that throws denies the
+// call: the dispatcher fails open, and a failure must not open a boundary.
+//
+// What a path is, as the guard reads it (host.mjs `pathForms`, paths.mjs `realForms`): every spelling a host may
+// open — trimmed, `~` expanded, Qwen's escapes undone — and, for each, both real paths a `..` after a link
+// can mean (the kernel's, and the host's, which collapses `..` as text first); the call is denied when any of
+// them is. A path starting `~name` is another user's home and is denied unjudged. The guarded roots are
+// every key of `mounts:` — a problem entry and a file that does not parse included (D01) — and the folder
+// the write guard keeps its record in (`oikos-hooks/` under the temp folder) is closed to the edit tools.
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative, isAbsolute } from 'node:path';
 import { decide } from './common.mjs';
-import { isEdit, fileTargets } from './host.mjs';
-import { CORE_ROOT, installRoot, realOf } from '../common/paths.mjs';
-import { config } from '../common/config.mjs';
-import { mountOf } from '../common/mounts.mjs';
+import { isEdit, isRead, isSearch, searchScopes, fileTargets, unjudgeablePath } from './host.mjs';
+import { CORE_ROOT, idOf, installRoot, realForms, realOf } from '../common/paths.mjs';
 import { mountsEditProblem } from './mounts-lock.mjs';
+import {
+  aboveInstallation, boundaryOf, failedCheckReason, foreignInstallation, foreignReadReason, foreignWriteReason, guardedMounts, hardLinked, hardLinkReason,
+  inside, mountHolding, otherInstallation, scopeReason,
+} from './boundary.mjs';
 
-/** The path relative to the core when it is inside the core, else null. */
+export { guardedMounts };
+
+/**
+ * The path relative to the core when it is inside the core, else null. Judged as ADR 0007 D02 says:
+ * the real path, component by component, and — when the spelling differs (a case variant on a file
+ * system that folds case) — by the identity of the folders above it.
+ */
 export function insideCore(path, cwd) {
-  const rel = relative(realpathSync(CORE_ROOT), realOf(resolve(cwd || process.cwd(), path))).replace(/\\/g, '/');
-  return rel.startsWith('..') || isAbsolute(rel) ? null : rel;
+  return coreRelative(realOf(path, cwd || process.cwd()));
 }
 
-/** The mounts a file tool may not write into: the configured ones, and the roots recorded in `.local/sync.json` that no configured mount has. */
-export function guardedMounts(install) {
-  let mounts = [];
-  try {
-    mounts = config().mounts;
-  } catch { /* an unreadable configuration: the recorded roots still guard */ }
-  let recorded = {};
-  try {
-    recorded = JSON.parse(readFileSync(resolve(install, '.local', 'sync.json'), 'utf8')).mounts ?? {};
-  } catch { /* no record, or one that does not read */ }
-  const roots = typeof recorded === 'object' && recorded !== null ? Object.keys(recorded) : [];
-  return [...mounts, ...roots.filter((root) => !mounts.some((m) => m.root === root)).map((root) => ({ path: root, root }))];
+/** {@link insideCore} for the real path `real`. */
+function coreRelative(real) {
+  const core = realpathSync(CORE_ROOT);
+  const rel = relative(core, real).replace(/\\/g, '/');
+  if (!rel.startsWith('..') && !isAbsolute(rel)) return rel;
+  const coreId = idOf(core);
+  const names = [];
+  for (let dir = real; coreId !== null; dir = dirname(dir)) {
+    if (idOf(dir) === coreId) return names.join('/');
+    names.unshift(basename(dir));
+    if (dirname(dir) === dir) break;
+  }
+  return null;
 }
 
-export function run(payload) {
-  if (!isEdit(payload)) return;
-  const install = installRoot();
-  if (!install) return; // the core repository itself: development
-  const cwd = payload.cwd || install;
-  const mounts = guardedMounts(install);
+/**
+ * Why a search or a read of `named` — a path as the call names it, `real` as it really is — is denied by the
+ * boundary (ADR 0007 D05), or null: a search scope above this installation would reach every installation
+ * beside it, and a path of another installation is closed unless it is registered as a mount (one
+ * definition of that, {@link foreignInstallation}).
+ */
+function readDenial(payload, named, real, boundary, searching) {
+  const what = `\`${payload.tool_name}\``;
+  if (searching && aboveInstallation(real, boundary)) return scopeReason(what, `\`${named}\``, real);
+  const other = foreignInstallation(real, boundary);
+  return other ? foreignReadReason(what, `\`${named}\``, real, other) : null;
+}
+
+/** Why a search tool's call is denied — a scope above this installation, or in an unregistered installation — or null; each scope {@link searchScopes} names is judged. */
+function searchDenial(payload, cwd, boundary) {
+  for (const { named, real } of searchScopes(payload, cwd)) {
+    const denial = readDenial(payload, named, real, boundary, true);
+    if (denial) return denial;
+  }
+  return null;
+}
+
+/** Why a file tool's read of a path is denied — it is in an installation not registered as a mount, by any real path it may reach ({@link realForms}) — or null. */
+function fileReadDenial(payload, cwd, boundary) {
   for (const path of fileTargets(payload)) {
-    const rel = insideCore(path, cwd);
-    if (rel !== null && !/^node_modules(\/|$)/.test(rel)) {
-      decide(payload, 'deny', `oikos package guard: oikos/${rel} belongs to oikos itself, which is read-only in an installation `
-        + '— `oikos/` is the core checkout every installation on this machine shares, and a local edit turns every update '
-        + 'into a merge. The organization\'s settings go to `oikos.yaml`, `resources/` or `AGENTS.md` here, personal ones to '
-        + '`.local/`, notes to the vault; a change useful to everyone is proposed to the user and made in the oikos core '
-        + `repository (${realpathSync(CORE_ROOT)}), in a session started there (DEVELOPMENT.md).`);
-      return;
-    }
-    const unlock = mountsEditProblem(payload.tool_input || {}, path, cwd, install);
-    if (unlock) {
-      decide(payload, 'deny', unlock);
-      return;
-    }
-    const mount = mountOf(mounts, realOf(resolve(cwd, path)));
-    if (mount) {
-      decide(payload, 'deny', `oikos package guard: ${path} is inside the mount \`${mount.path}\` — an installation writes only into itself, `
-        + `so a mount is changed in a session opened there: open a session in \`${mount.path}\` to change it. Reading it is open.`);
-      return;
+    for (const real of realForms(path, cwd, boundary.links)) {
+      const denial = readDenial(payload, path, real, boundary, false);
+      if (denial) return denial;
     }
   }
+  return null;
+}
+
+/** The reason for a path that starts with another user's home (`~name`), which no guard can judge, `what` naming it. */
+const unjudgeableReason = (payload, named) => `oikos package guard: \`${payload.tool_name}\` names ${named}, a path in another user's home, which no guard can judge `
+  + '(the host decides what it expands to), so the call is denied. Name the path by its absolute path.';
+
+/** Why a file tool's call is denied, or null. */
+function denialOf(payload, install, cwd) {
+  const unjudgeable = unjudgeablePath(payload);
+  if (unjudgeable !== undefined) return unjudgeableReason(payload, unjudgeable);
+  const boundary = boundaryOf(install);
+  if (isSearch(payload)) return searchDenial(payload, cwd, boundary);
+  if (isEdit(payload)) return editDenial(payload, install, cwd, boundary);
+  return isRead(payload) ? fileReadDenial(payload, cwd, boundary) : null;
+}
+
+/** The guard: a check that throws denies the call, since a failure must not open the boundary (a hook that fails open lets the call through unchecked). */
+export function run(payload) {
+  const install = installRoot(); // none in the core repository itself: development
+  if (!install) return;
+  let reason;
+  try {
+    reason = denialOf(payload, install, payload.cwd || install);
+  } catch (error) {
+    reason = failedCheckReason('package guard', 'boundary check', `\`${payload.tool_name}\` of ${fileTargets(payload).join(', ') || 'no path'}`, error);
+  }
+  if (reason) decide(payload, 'deny', reason);
+}
+
+/** The reason for a write into the core: `rel` is the path in it. */
+const coreReason = (rel) => `oikos package guard: oikos/${rel} belongs to oikos itself, which is read-only in an installation `
+  + '— `oikos/` is the core checkout every installation on this machine shares, and a local edit turns every update '
+  + 'into a merge. The organization\'s settings go to `oikos.yaml`, `resources/` or `AGENTS.md` here, personal ones to '
+  + '`.local/`, notes to the vault; a change useful to everyone is proposed to the user and made in the oikos core '
+  + `repository (${realpathSync(CORE_ROOT)}), in a session started there (DEVELOPMENT.md).`;
+
+/**
+ * The folder where the write guard keeps, per session, which guarded writes were shown and the user had
+ * the word for (common.mjs `STATE_DIR`): a file tool that could write there could forge the record.
+ */
+const stateFolder = () => realOf(join(tmpdir(), 'oikos-hooks'));
+
+/** Why a file tool's write to the real path `real` (named `path`) is denied by the state folder, the mounts, the other installations or a second name — or null. */
+function realEditDenial(payload, path, real, boundary) {
+  const state = stateFolder();
+  if (inside(real, state, idOf(state), boundary)) {
+    return `oikos package guard: ${path} is in the hook state folder (${state}), where the write guard records which guarded writes were shown and confirmed — `
+      + 'an assistant that could write there could forge a dry run and run a guarded write without one. A file tool does not change it.';
+  }
+  const mount = mountHolding(real, boundary);
+  if (mount) {
+    return `oikos package guard: ${path} is inside the mount \`${mount.path}\` — an installation writes only into itself, `
+      + `so a mount is changed in a session opened there: open a session in \`${mount.path}\` to change it. Reading it is open.`;
+  }
+  const other = otherInstallation(real, boundary);
+  if (other) return foreignWriteReason(`\`${payload.tool_name}\``, path, real, other);
+  return hardLinked(real) ? hardLinkReason(`\`${payload.tool_name}\``, path) : null;
+}
+
+/**
+ * Why a file tool's write to `path` is denied — inside the core, a file the guards lean on, the hook state
+ * folder, a mount, another installation, a file with a second name — or null. The path is judged as every
+ * real path it may reach ({@link realForms}), and denied when any of them is.
+ */
+function pathEditDenial(payload, path, cwd, install, boundary) {
+  const reals = realForms(path, cwd, boundary.links);
+  for (const real of reals) {
+    const rel = coreRelative(real);
+    if (rel !== null && !/^node_modules(\/|$)/.test(rel)) return coreReason(rel);
+  }
+  const unlock = mountsEditProblem(payload.tool_input || {}, path, cwd, install);
+  if (unlock) return unlock;
+  for (const real of reals) {
+    const denial = realEditDenial(payload, path, real, boundary);
+    if (denial) return denial;
+  }
+  return null;
+}
+
+/** Why a file tool's write is denied — inside the core, in a mount, in another installation, in the files the guards lean on, to a file that has a second name — or null. */
+function editDenial(payload, install, cwd, boundary) {
+  for (const path of fileTargets(payload)) {
+    const denial = pathEditDenial(payload, path, cwd, install, boundary);
+    if (denial) return denial;
+  }
+  return null;
 }

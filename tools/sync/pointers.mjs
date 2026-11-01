@@ -45,10 +45,10 @@ const originOf = (m, skill) => `Origin: the skill \`${skill.dir}\` of the mount 
 
 /**
  * A mount's pointer is kept out of the installation's commits when the path it names is this machine's:
- * an outside mount's, or a local-layer one's — unless the person asked to commit it (`skills.commit`,
+ * an outside mount's, or a local-layer one's — unless the person asked to commit it (`skills.tracked`,
  * allowed only for an inside mount, whose link is relative).
  */
-const keptOut = (m) => !m.inside || (m.layer === 'local' && !m.skills.commit);
+const keptOut = (m) => !m.inside || (m.layer === 'local' && !m.skills.tracked);
 
 const layerFile = (m) => (m.layer === 'local' ? '.local/mounts.yaml' : 'oikos.yaml');
 

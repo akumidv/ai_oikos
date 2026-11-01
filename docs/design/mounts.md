@@ -1,17 +1,24 @@
 # Design — mounts: other repositories as sources of skills and notes, never of rules (A9)
 
 Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md)). Nothing here
-is accepted until the owner says so; accepted commitments then move to an ADR (the next free
-number is 0007) and the implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md) (A9).
+is accepted until the owner says so; accepted commitments then move to
+[ADR 0007](../adr/0007-mounts.md) and the implementation steps to
+[`_aitna/TASKS.md`](../../_aitna/TASKS.md) (A9, A11).
 
 **State:** drafted from an installation's requirement and checked against the core's code and
-the agent hosts' documentation. Every `D-A9-*` point is decided by the owner (§ Open points);
-D-A9-AKMON moved to task A10. The boundary between installations (task A11) builds on the same
-model and is designed in § Linked installations. ADR 0007 is drafted and carries the owner's decisions on the
-audit's points too (§ Open points); it awaits a security re-audit of D04–D05 and the owner's
-acceptance. S1, S2 and S3 are built, uncommitted. **How to resume:** read § Frame, § Survey (the
-corrections to the first draft), § Design, § Linked installations, then § Open points and
-ADR 0007; build § Plan slice by slice, trunk first.
+the agent hosts' documentation. Every `D-A9-*` and `D-A11-*` point is decided by the owner
+(§ Open points); D-A9-AKMON moved to task A10. The boundary between installations (task A11) builds
+on the same model and is designed in § Linked installations. ADR 0007 carries the owner's
+decisions on both audits' points and on the security re-audit of D04–D05, and is accepted by the
+owner. **Where the ADR and this text differ, the ADR wins**: it is the
+later and the more exact text, and this design keeps the reasoning, the plan and the open points.
+Built, uncommitted: S1, S2, S3, `setup mount add|remove` with the YAML splicer moved into
+`tools/common/yaml-splice.mjs`, D-A9-GUARD-FILES (the closed files and keys, the listed `allow:`
+passes, the short `allow:` entry ignored, `sync --prune`), D-S3-PREFIX and D-COMMIT-OPT-IN.
+**How to resume:** read § Frame, § Survey (the corrections to the first draft), § Design, § Linked
+installations, then § Open points and ADR 0007; build § Plan slice by slice. Next: S6 (the `vault`
+tool and its check), S4 (shell and `git` coverage, with F10 and F15 of the re-audit), then S5, S7
+(left: the `setup init --vault` migration), S8, the gate, and A11's B1–B4.
 
 ## Frame
 
@@ -206,7 +213,11 @@ mounts:
 
 - **Two layers, the local one wins** (D-A9-WHERE). `config()` merges `.local/mounts.yaml` over
   `oikos.yaml` by real path: a local entry for a path the shared file declares replaces that
-  entry as a whole. A local entry cannot add writes, since a mount has none.
+  entry as a whole, but only narrows it (D-A9-LOCAL-NARROW): `use: wiki` is a write route (the
+  `vault` connector), so a local entry cannot add `wiki` to `use` or set
+  `mention_assistant: allow` where the shared entry does not; the widening is a problem and is
+  dropped. A problem entry is not used by the `vault` tool or `transfer` and stays protected by the
+  guards ([ADR 0007](../adr/0007-mounts.md) D01).
 - **`use`.** `wiki` makes the mount a source of the `vault` connector; `skills` makes pointers to
   its skills. Without `use` the mount is read only: its files may be read, nothing is taken from
   it.
@@ -219,7 +230,9 @@ mounts:
     path may be absolute.
   - A repository nested deeper inside a mount, such as a development root's child checkouts, is
     covered by that mount.
-  - Paths are compared by their real path. Which form the host matches in `claudeMdExcludes`,
+  - Paths are judged component by component, links followed before the next `..`, containment by
+    device and inode or with the case checked, hard-linked targets refused (ADR 0007 D02 § How a
+    target path is judged; the re-audit's F4). Which form the host matches in `claudeMdExcludes`,
     logical or real, is TV.
 - **oikos does not create a mount**; the user adds the submodule or clone. BOOTSTRAP says how,
   including `ignore = all` in `.gitmodules` for a repository that commits often (a vault), so the
@@ -244,8 +257,10 @@ mounts:
 ### What `sync` writes per mount
 
 Absolute paths go only into git-ignored local files. `sync` replaces only what it wrote and
-records it in `.local/sync.json` (`{mcp: [...], mounts: {...}}`), so a removed mount entry
-removes its wiring. Build it as `tools/sync/mounts.mjs`, not as more top-level script.
+records it in `.local/sync.json` (`{mcp: [...], mounts: {...}}`). A removed mount entry keeps
+its wiring under plain `sync`, which prints a note; `sync --prune`, a guarded write with its dry
+run first, removes exactly that wiring (D-A9-GUARD-FILES, ADR 0007 D02). Built as
+`tools/sync/mounts.mjs`, not as more top-level script.
 
 1. **The installation does not load an inside mount's rules.** `sync` adds `claudeMdExcludes` to
    the installation's `.claude/settings.local.json`: `<abs mount>/**/CLAUDE.md`,
@@ -259,11 +274,13 @@ removes its wiring. Build it as `tools/sync/mounts.mjs`, not as more top-level s
    local and never changes the mount's committed files.
 4. **Skills** (`use: skills`):
    - one pointer per skill under `skills.from` (only those in `skills.only` when it is set), named
-     `<prefix>-<name>`, next to oikos's own, with the same marker;
+     `<prefix>-<name>`, next to oikos's own, with the same marker; the prefix defaults to the
+     mount folder's name slugified and matches `^[a-z0-9][a-z0-9-]*$`, and a pointer name over 64
+     characters is a problem that skips only that pointer (D-S3-PREFIX);
    - the link is computed for an inside mount;
-   - for an outside mount the pointer is kept out of the installation's commits, either through
-     the installation's `.git/info/exclude` or by a pointer that names the mount and leaves the
-     path to `.local/` (TV, choose at build time);
+   - the pointer of an outside mount, and every pointer of a personal mount, goes into the
+     installation's `.git/info/exclude` (chosen at build time), unless `skills.tracked: true` is
+     set on a personal inside mount (D-A9-PERSONAL-POINTERS, D-COMMIT-OPT-IN);
    - the pointer says where the skill comes from, that the mount's rules are not loaded, and that
      work which writes into the mount or needs its guards is done in a session opened there;
    - running the mount's own tools with its credentials is not part of this task: a mount skill
@@ -275,6 +292,8 @@ removes its wiring. Build it as `tools/sync/mounts.mjs`, not as more top-level s
 6. **Checks.** `sync --check` is red when:
    - a declared mount is missing or not a repository top;
    - it overlaps `oikos/`, `.local/` or another mount;
+   - it is a problem entry of ADR 0007 D01 (this installation or a folder above it, the core,
+     another installation that is not a linked one without `use`);
    - two wikis share a name, or more than one is `default`;
    - a name in `skills.only` is not a skill under `skills.from`;
    - the wiring of items 1–5 is missing or stale, or names another installation root (a move).
@@ -286,24 +305,45 @@ removes its wiring. Build it as `tools/sync/mounts.mjs`, not as more top-level s
 
 - **An installation writes only into itself** (D-A9-VAULT-WRITE). The core is already guarded
   this way; every mount and every linked installation joins it.
-  - File tools: `package-guard` denies `Edit`/`Write`/`NotebookEdit` of a path inside any mount
-    with "open a session in `<mount>` to change it". `sync`'s own wiring (items 2–3) is written by
-    `sync`, not through the file tools.
+  - File tools: `package-guard` denies `Edit`/`Write`/`NotebookEdit`/`MultiEdit` of a path inside
+    any mount with "open a session in `<mount>` to change it". `sync`'s own wiring (items 2–3) is
+    written by `sync`, not through the file tools.
+  - The files the guards lean on are closed to the file tools (D-A9-SELF-UNLOCK,
+    D-A9-GUARD-FILES; `tools/hooks/mounts-lock.mjs`, built): `.local/mounts.yaml`,
+    `.local/outgoing.yaml`, `.local/sync.json`, the `mounts:` part of `oikos.yaml`, and the keys
+    `hooks`, `disableAllHooks`, `claudeMdExcludes` of `settings.json`/`settings.local.json` in
+    `.claude/` and `.qwen/`.
   - Shell: a redirection into a mount is denied, and so are `git` write subcommands (`add`,
-    `commit`, `push`, `checkout`, `reset`, `rebase`, `merge`, `stash`, `tag`) with `-C <mount>` or
-    after a `cd` into it. This uses write-guard's parsing, moved first into a shared
-    `tools/hooks/shell.mjs` without changing its behaviour. `git-guard` takes the target repository
-    from `-C`/`cd` the same way.
+    `commit`, `push`, `checkout`, `reset`, `rebase`, `merge`, `stash`, `tag`; any subcommand not on
+    a read allow-list) into a mount. The target comes from `-C`, a `cd`, `--git-dir`,
+    `--work-tree`, `GIT_DIR` and `GIT_WORK_TREE`; submodule recursion and `clean -ff` count as a
+    write into every inside mount; a read with `-c` or `--config-env` counts as a write
+    (D-A9-AUDIT2-GAPS, F15). This uses write-guard's parsing, moved into the shared
+    `tools/hooks/shell.mjs` without changing its behaviour (S2). `git-guard` takes the target
+    repository the same way.
   - Reads stay open.
+  - What the hooks do not see is stated in ADR 0007 D02 Consequences: other writing programs in
+    the shell, MCP tools and Codex sessions (task L5), and the user's answer to a dry run.
 - **The `vault` connector is the one route into a mount.** It writes notes into `use: wiki` mounts
-  only, and nothing of the installation goes with them (leak 3, D-A9-LEAK):
-  - every note goes through `outgoingFindings` with the categories `path`, `secret`, `term`, and
-    `assistant` unless the mount sets `mention_assistant: allow` (D-A9-OIKOS-WORD); `language` is
-    off unless the vault's `wiki.rules` sets a language;
-  - the terms are the built-ins, `.local/outgoing.yaml`, and the installation-derived terms: its
-    absolute root, this machine's home path and the names of `.local/` files;
-  - a finding refuses the write with the places named; `allow:` lets a line pass, as ADR 0003
-    defines, and the tool keeps the write commands' override flags.
+  only, and nothing of the installation goes with them (leak 3, D-A9-LEAK). The exact rules are
+  ADR 0007 D04; in short:
+  - every note goes through `outgoingFindings` — its path and name, frontmatter, headings and
+    body, template text included — with the categories `path`, `secret`, `term`, and `assistant`
+    unless the mount sets `mention_assistant: allow` (D-A9-OIKOS-WORD); `language` is off unless
+    the vault's `wiki.rules` sets a language;
+  - the terms are the built-ins, `.local/outgoing.yaml`, the installation-derived terms (its
+    absolute root, this machine's home path and the names of `.local/` files), the linked
+    installations' terms (D-A11-LINKED-TERMS), and for a personal vault also the organization's
+    markers (D-A9-VAULT-TERMS, F7);
+  - the text is normalised before matching (NFKC, zero-width characters and emphasis markup
+    removed, split words joined; F13), and executable or fetching content is refused unless
+    `wiki.rules` allows it (D-A9-NOTE-EXEC);
+  - a finding refuses the write with the places named; the one override is an `allow:` line of
+    `.local/outgoing.yaml` — no `--allow-flagged` on the `vault` tool (D-A9-OVERRIDE); an `allow:`
+    entry shorter than 8 characters is ignored, and the dry run lists each line an entry let pass
+    (D-A9-GUARD-FILES).
+  - It writes only into `wiki.inbox` or below the notes root, never under any mount's
+    `skills.from`, a `SKILL.md`, a dot folder, a rule file or a nested repository (F5).
 
   Committing the vault is the user's, in their own git client or a session opened in the vault,
   so no agent commit inside a mount needs a scan.
@@ -349,12 +389,18 @@ inside one installation's `.local/`.
   - a personal link goes in `.local/mounts.yaml`, so it is named in no committed file and no index.
 
   A registered installation can be read at any time, including for a one-off lookup.
-- **The boundary guard** (D-A11-BOUNDARY): on in every installation, never declared.
-  - A path belongs to **another installation** when an ancestor of its real path holds an
-    `oikos.yaml` beside an `oikos/`, and that ancestor is not this installation.
+- **The boundary guard** (D-A11-BOUNDARY): on in every installation, never declared, in the
+  hosts oikos wires its guards for (Claude Code, Qwen Code; not Codex).
+  - A path belongs to **another installation** when the nearest ancestor of its real path that
+    `isInstallation` accepts — an `oikos.yaml` **or** an `oikos/` that leads to the core
+    (`tools/common/paths.mjs`) — is not this installation. Paths are judged as ADR 0007 D02 says.
   - A read there (`Read`, `Grep`, `Glob`, and shell reads by the path tracking of `shell.mjs`) is
     denied unless the installation is registered: "register it in `.local/mounts.yaml`".
-  - A write there is denied always (§ Guards).
+  - A search whose scope is an ancestor of this installation's root is denied unless it stays
+    inside this installation's mounts; any shell command that names a path in an unregistered
+    installation is denied, whatever the program (D-A9-AUDIT2-GAPS, F10; built in S4). A hard
+    link made earlier is an accepted gap.
+  - A write there is denied on every route § Guards covers.
   - Today only the browser tells installations apart, by the profile path.
 - **What may be changed** (D-A11-SHARED). An installation changes only itself. It reads the core,
   its mounts and its linked installations, and changes none of them. This is the rule of
@@ -363,12 +409,22 @@ inside one installation's `.local/`.
   - Material goes from one installation into another only through one command, run **in the
     receiving installation**, so it still writes only into itself: `setup transfer <file in a
     linked installation> [--to <path>] --dry-run`.
-  - It runs the leak check of the direction, through `outgoingFindings` with the source's terms:
-    - into an organization's installation: the source's personal terms (its
-      `.local/outgoing.yaml`, its `.local/` names);
-    - out of one: the organization's terms, which are its email domain, the internal hosts of
-      its connectors, its tracker key patterns and its `terms`.
-  - It shows the findings, and the user confirms.
+  - It runs `outgoingFindings` with the terms of **both** installations together, whichever way
+    the file goes (D-A11-DIRECTION; this replaces the first draft's check "of the direction" with
+    the source's terms only): their `.local/outgoing.yaml` terms and derived terms, and the
+    organization's markers — its email domain, the internal hosts of its connectors, its tracker
+    key patterns.
+  - A finding refuses the transfer, as a vault note's does; the one override is an `allow:` line
+    of the receiving installation's `.local/outgoing.yaml` (D-A11-TRANSFER-REFUSE).
+  - The source is text only in the first version, a binary one is refused; its real path lies in
+    a registered linked installation, outside its closed stores and `.env*` files, checked by the
+    tool itself (D-A11-TRANSFER-BINARY).
+  - `--to` lies inside this installation, never in the core, a mount, `.git/`, a host folder, a
+    closed store, `.local/{mounts,outgoing}.yaml`, `.local/sync.json` or a rule file; the dry run
+    says when it would overwrite (F2). Exact text: ADR 0007 D05.
+  - Every outgoing-text check in an installation also takes the terms of all its linked
+    installations (D-A11-LINKED-TERMS), so text copied after a read is caught once it takes a
+    checked route.
   - A typical case: a summary of footprint reports the user agreed to, taken into the personal
     installation for a CV.
 
@@ -376,9 +432,9 @@ Plan: after A9 S1 (mounts in `config()`) and S2 (`shell.mjs`).
 
 | Slice | What | Delegate |
 |---|---|---|
-| B1 | The boundary guard for the file tools (reads of an unregistered installation, writes of any) with tests | k_implementer |
-| B2 | The same through `shell.mjs` | k_implementer |
-| B3 | `setup transfer` with the direction's terms (the organization's terms derived from `oikos.yaml`), `--dry-run`, the write verb in `writes.mjs` | k_implementer, then k_auditor (security) |
+| B1 | The boundary guard for the file tools (reads of an unregistered installation, writes of any; paths judged per ADR 0007 D02) with tests | k_implementer |
+| B2 | The same through `shell.mjs` (the search-scope and any-program rules of F10 land in S4) | k_implementer |
+| B3 | `setup transfer` with both installations' terms (the organization's markers derived from `oikos.yaml`), a finding refuses, text sources only, the source and `--to` rules, `--dry-run`, the write verb in `writes.mjs`; the linked installations' terms in every outgoing check | k_implementer, then k_auditor (security: F2, F4, F11 against the code) |
 | B4 | Docs: OIKOS.md (What lives where: the root is the repository, `.local/` never is; linked installations), BOOTSTRAP.md (a personal installation beside an organization's) | k_mechanic |
 
 TV at build time: how the organization's tracker key patterns are read from `oikos.yaml`; what a
@@ -392,14 +448,14 @@ orchestrator keeps synthesis and the owner dialogue.
 
 | Slice | What | Delegate |
 |---|---|---|
-| S0 | Owner decisions `D-A9-*`, then the ADR 0007 draft; the owner decides. | orchestrator; k_auditor over the ADR draft |
-| **S1 trunk** | `mounts` in `config()`, both layers merged per D-A9-WHERE (local wins), `use`, `skills.only`, with its problems; mount roots in `paths.mjs`; `tools/sync/mounts.mjs` items 1–3 with the `sync.json` record and `--check`; `package-guard` denies file-tool writes into every mount; `session-start` line; tests | k_implementer |
-| S2 | Move write-guard's `workingDirs` and redirection stripper into `tools/hooks/shell.mjs`; behaviour unchanged, tests green | k_mechanic |
-| S3 | Skill pointers with the prefix and `skills.only` (computed link, outside-mount rule), `landscape` origin | k_implementer |
-| S4 | Shell coverage of the write rule: redirections and `git -C`/`cd` write subcommands into any mount; `git-guard` target repository via `shell.mjs`; first `git-guard` tests | k_implementer, then k_auditor (security) |
+| S0 | Owner decisions `D-A9-*`, then the ADR 0007 draft; the owner decides. Both audits and their decisions are in; ADR 0007 accepted by the owner. | orchestrator; k_auditor over the ADR draft |
+| **S1 trunk** | `mounts` in `config()`, both layers merged per D-A9-WHERE (local wins), `use`, `skills.only`, with its problems; mount roots in `paths.mjs`; `tools/sync/mounts.mjs` items 1–3 with the `sync.json` record and `--check`; `package-guard` denies file-tool writes into every mount; `session-start` line; tests. Built, with the closed files and keys of D-A9-GUARD-FILES (`mounts-lock.mjs`), the listed `allow:` passes and `MIN_ALLOW_LENGTH`, `sync --prune`, and `setup mount add\|remove` | k_implementer |
+| S2 | Move write-guard's `workingDirs` and redirection stripper into `tools/hooks/shell.mjs`; behaviour unchanged, tests green. Built | k_mechanic |
+| S3 | Skill pointers with the prefix and `skills.only` (computed link, outside-mount rule), `landscape` origin; D-S3-PREFIX, `skills.tracked`. Built | k_implementer |
+| S4 | Shell coverage of the write rule: redirections and `git` write subcommands into any mount, the target from `-C`, `cd`, `--git-dir`, `--work-tree`, `GIT_DIR`, `GIT_WORK_TREE`, submodule recursion and `clean -ff` as writes into every inside mount, `-c`/`--config-env` as a write (F15); the search-scope and any-program boundary rules (F10); the guards' paths judged per ADR 0007 D02 (F4); `git-guard` target repository via `shell.mjs`; first `git-guard` tests | k_implementer, then k_auditor (security) |
 | S5 | A moved installation: `sync --check` red on a generated file that names another root (`.mcp.json`, `settings.local.json`, `launch.json`, mount wiring), `sync` rewrites them (P3-5) | k_implementer |
-| S6 | `vault` tool and connector with the leak check (`outgoingFindings` plus derived terms, `mention_assistant`); `wiki` skill; akmon skill-pointer sync | k_implementer, then k_auditor (security) |
-| S7 | `setup mount add … --dry-run` (D-A9-HELPER) on the YAML splicer moved into a generic module; `setup init --vault` migration (D-A9-VAULT) | k_mechanic (extraction), k_implementer |
+| S6 | `vault` tool and connector with the check of ADR 0007 D04: `outgoingFindings` over path, frontmatter, headings and body (F14), derived and linked installations' terms, the organization's markers for a personal vault (F7), `mention_assistant`, normalised text (F13, in `outgoing.mjs` for every check), executable content refused (D-A9-NOTE-EXEC), the write targets (F5) and path judging (F4), problem entries unused (F8); `wiki` skill; akmon skill-pointer sync | k_implementer, then k_auditor (security: F4 links, `..`, drvfs case, hard links) |
+| S7 | `setup mount add … --dry-run` (D-A9-HELPER) on the YAML splicer moved into a generic module (built); `setup init --vault` migration (D-A9-VAULT) | k_mechanic (extraction), k_implementer |
 | S8 | Docs: OIKOS.md (What lives where: mounts; a mount's rules never load; an installation writes only into itself), DEVELOPMENT.md (Layout: what sync writes, the guards), BOOTSTRAP.md (adding a mount; moving an installation, P3-5), `examples/installation/oikos.yaml` | k_mechanic |
 | Gate | `npm run check`, `npm test` to green; audit of the whole change; live checks by the owner (§ To verify) | k_validator, k_auditor |
 
@@ -414,25 +470,33 @@ installations). S2 is behaviour-preserving and may start at once.
 | **D-A9-OUTSIDE** | May a mount live outside the installation? | **decided (owner): yes** | An absolute path, in the local layer only. An outside mount needs less wiring: no lazy rules, no ancestor chain. |
 | **D-A9-VAULT** | The existing vault model (`setup init --vault`, `obsidian vault:` in `.local/AGENTS.md`) | **decided (owner): A, migrate** | `--vault` writes a personal wiki mount into `.local/mounts.yaml`; `setup status` checks the mount; the `obsidian vault:` line goes; OIKOS.md follows. |
 | **D-A9-LEAK** | The leak check of text written into a mount | **decided (owner): A** | `outgoingFindings` with the categories `path`, `secret`, `term` (and `assistant` per D-A9-OIKOS-WORD); the terms are the built-ins, `.local/outgoing.yaml` and the derived installation terms. `language` is off unless `wiki.rules` sets one. A hook only denies: the way past a false finding is an `allow:` line. It runs in the `vault` connector (§ Guards). Rejected: B, a new `.local/personal-terms`. |
-| **D-A9-OIKOS-WORD** | A note that mentions oikos (Q6) | **decided (owner): C** | `assistant` is on by default, as ADR 0003 has it; a mount may set `mention_assistant: allow` (a personal vault, where notes about one's own tools are normal). ADR 0003 is not amended. |
+| **D-A9-OIKOS-WORD** | A note that mentions oikos (Q6) | **decided (owner): C** | `assistant` is on by default, as ADR 0003 has it; a mount may set `mention_assistant: allow` (a personal vault, where notes about one's own tools are normal). Its "ADR 0003 is not amended" is superseded by D-A9-0003-SCOPE. `mention_assistant: allow` is the mount's choice of categories, not an override of a finding (ADR 0007 D04; the re-audit's C5). |
 | **D-A9-CONNECTOR** | Is the `vault` connector derived from `use: wiki`, or also listed in `connectors.wiki`? | **decided (owner): A, derived** | Any wiki mount makes `vault` available; it is never the default wiki connector; a request that names a vault or a note selects it; the installation's `AGENTS.md` may set the order. |
 | **D-A9-VAULT-WRITE** | May an installation session write into a mount? | **decided (owner): A** | An installation writes only into itself. The file tools and the shell never write into a mount; the `vault` connector writes notes into `use: wiki` mounts, with the leak check. The first draft's `write:` key is gone. |
 | **D-A9-SKILL-PICK** | Which of a mount's skills get pointers | **decided (owner): a filter** | `skills.only: [names]`; absent, all of them. It keeps out a skill that duplicates one of oikos's own. |
-| **D-A9-HELPER** | `setup mount add <path> --use … --dry-run`, or the user edits the YAML | **decided (owner): the helper** | Built in S7, after the splicer is extracted. It writes to `.local/mounts.yaml` or `oikos.yaml` by `--personal`/`--shared`, and takes `--use` and `--skills-only`. |
+| **D-A9-HELPER** | `setup mount add <path> --use … --dry-run`, or the user edits the YAML | **decided (owner): the helper** | Built (with S1, on the splicer extracted into `tools/common/yaml-splice.mjs`). It writes to `.local/mounts.yaml` or `oikos.yaml` by `--personal`/`--shared`, and takes `--use`, `--skills-only`, `--prefix`, `--wiki-name` and `--tracked-pointers`. |
 | **D-A9-AKMON** | Is an installation itself attached to akmon? | **moved out of A9 (owner)** | akmon is meant for developing code, agents and skills in installations too, attached more softly than for developers, since oikos users are not developers; the model is task A10. A9 assumes no akmon in an installation and must not block one: a mount's exclusion wiring and the guards stay valid if an installation later carries `_aitna/`. |
-| **D-A9-SHAPES** | The resolved mount and the `sync.json` record of S1 | **decided (owner): accepted** | `{ path, layer, root, inside, use, skills, wiki, mention_assistant }`; `mounts: { <real root>: { installExcludes, installDirs, excludes, created, ignored, pointers, installIgnored } }`. |
-| **D-A9-SELF-UNLOCK** | An agent edits the mounts list, then writes into the dropped mount (audit) | **decided (owner): A** | The file tools may not edit `.local/mounts.yaml` or the `mounts:` part of `oikos.yaml`; mounts change through `setup mount add\|remove --dry-run`. Rejected: B, rely on the write's confirmation. |
-| **D-A9-PERSONAL-POINTERS** | A personal mount's pointer lands in the organization's commits (audit) | **decided (owner): A, with an opt-in** | Pointers of personal and outside mounts go into the installation's `info/exclude`; the user may set `skills.commit: true` on a personal inside mount to commit them. Rejected: B, no pointers for personal mounts. |
-| **D-A9-VAULT-TERMS** | Is a note into a personal vault checked against the organization's terms? (audit) | **decided (owner): A** | Yes, every note in either layer. Rejected: B, secrets and paths only. |
+| **D-A9-SHAPES** | The resolved mount and the `sync.json` record of S1 | **decided (owner): accepted** | `{ path, layer, root, inside, use, skills, wiki, mention_assistant }`; `mounts: { <real root>: { installExcludes, installDirs, excludes, created, ignored, pointers, installIgnored } }`. Confirmed by the owner with S3 and D-A9-GUARD-FILES: in the resolved `skills`, `prefix` is the effective prefix or null when none is usable, and `tracked` is always a boolean; the outgoing rules gain `problems` (the ignored `allow:` entries). |
+| **D-A9-SELF-UNLOCK** | An agent edits the mounts list, then writes into the dropped mount (audit) | **decided (owner): A** | The file tools may not edit `.local/mounts.yaml` or the `mounts:` part of `oikos.yaml`; mounts change through `setup mount add\|remove --dry-run`. Rejected: B, rely on the write's confirmation. Widened by D-A9-GUARD-FILES. |
+| **D-A9-PERSONAL-POINTERS** | A personal mount's pointer lands in the organization's commits (audit) | **decided (owner): A, with an opt-in** | Pointers of personal and outside mounts go into the installation's `info/exclude`; the user may set `skills.tracked: true` (D-COMMIT-OPT-IN) on a personal inside mount to commit them. Rejected: B, no pointers for personal mounts. |
+| **D-A9-VAULT-TERMS** | Is a note into a personal vault checked against the organization's terms? (audit) | **decided (owner): A** | Yes, every note in either layer; for a personal (local-layer) vault the terms also include the organization's markers as transfer uses them — email domain, connectors' internal hosts, tracker key patterns (the re-audit's F7, part 1). Rejected: B, secrets and paths only. |
 | **D-A9-LOCAL-NARROW** | A local entry widens a shared one (audit) | **decided (owner): A** | Whole replacement stays, but a local entry cannot add `wiki` to `use` or set `mention_assistant: allow`; the attempt is a problem and is dropped. Rejected: B, the local entry may do anything. |
 | **D-A9-OVERRIDE** | How a vault note with a finding passes (audit) | **decided (owner): A** | Only an `allow:` line of `.local/outgoing.yaml`; no `--allow-flagged` on the `vault` tool. Rejected: B, the flag as on other writes. |
 | **D-A9-0003-SCOPE** | ADR 0007's relation to ADR 0003 (audit) | **decided (owner): as recommended** | ADR 0007 refines ADR 0003 for vault notes: they leave D05's unchecked routes for D01's checked route, and their override is narrower than D03's. This replaces "ADR 0003 is not amended" of D-A9-OIKOS-WORD. |
 | **D-A11-COPY** | Text read from a linked installation and written here by the file tools (audit) | **decided (owner): A** | A rule in OIKOS.md, not machine-checked: such material moves only through `setup transfer`. Rejected: B, no reads of linked installations. |
 | **D-A11-DIRECTION** | Which terms `setup transfer` checks (audit) | **decided (owner): A** | The terms of both installations together, either way. Rejected: B, a `kind: personal` label. |
-| Q1 | Qwen Code: context-file loading across a `.git` boundary, an exclude setting, skills from a subfolder | open | Until known, Qwen gets items 3–5 and the guards, not 1–2. Codex likewise (no oikos guards wired). |
+| **D-A9-GUARD-FILES** | The files the guards lean on, open to the agent (re-audit F1, F9, F16) | **decided (owner): A; built** | Closed to the file tools (`tools/hooks/mounts-lock.mjs`): `.local/mounts.yaml`, `.local/outgoing.yaml`, `.local/sync.json`; in `settings.json`/`settings.local.json` of `.claude/` and `.qwen/` the keys `hooks`, `disableAllHooks`, `claudeMdExcludes`. The outgoing dry run lists every line an `allow:` entry let pass, with the entry; an `allow:` entry empty or shorter than 8 characters (`MIN_ALLOW_LENGTH`, `tools/common/outgoing.mjs`) is a problem and ignored. Plain `sync` keeps a gone mount's wiring and prints a note; only `sync --prune`, a guarded write (`writes.mjs` `sync: ['--prune']`) with its dry run first, removes it; `sync --dry-run` is read-only. Rejected: B, an accepted gap. |
+| **D-A9-NOTE-EXEC** | Notes that carry content Obsidian runs or fetches (re-audit F6) | **decided (owner): A** | The vault note check refuses `dataviewjs`, `$=`, `<%`, `<script>`, `<iframe>` and remote embeds unless `wiki.rules` allows them. Built in S6. Rejected: B, an accepted gap. |
+| **D-A11-TRANSFER-REFUSE** | Does a finding refuse a transfer? (re-audit F3) | **decided (owner): A** | Yes, as for a vault note; the only override is an `allow:` line in the receiving installation's `.local/outgoing.yaml`. Rejected: B, findings only advise. |
+| **D-A11-TRANSFER-BINARY** | Binary transfer sources (re-audit F11) | **decided (owner): A** | Text only in the first version; a binary source is refused. The source's real path lies in a registered linked installation, outside its closed stores and `.env*`, checked by the tool itself. Rejected: B, a binary source moves with the dry run saying its content was not checked. |
+| **D-A11-LINKED-TERMS** | Linked installations' terms in outward checks (re-audit F7, part 2) | **decided (owner): A** | Every outgoing-text check in an installation also takes the terms of all its linked installations: their `.local/outgoing.yaml` terms and derived terms. |
+| **D-A9-AUDIT2-GAPS** | What of the re-audit's F10, F12, F13, F15 is closed and what is an accepted gap | **decided (owner): as recommended** | Closed in S4: F10 (a search scope above the installation root denied unless it stays inside its mounts; any shell command naming a path in an unregistered installation denied whatever the program; a hard link made earlier is an accepted gap) and F15 (the `git` target also from `--git-dir`, `--work-tree`, `GIT_DIR`, `GIT_WORK_TREE`; submodule recursion and `clean -ff` a write into every inside mount; a read with `-c`/`--config-env` a write). F13: text normalised before matching (NFKC, zero-width characters and emphasis markup removed, split words joined), and the check stated as a net for accidents, not a barrier (ADR 0007 D04, ADR 0003 Consequences). Accepted gaps with a task: F12, content drift between dry run and real run (task L4; ADR 0007 D04, ADR 0003); MCP tools, Codex sessions and other writing programs in the shell (task L5; ADR 0007 D02). |
+| **D-S3-PREFIX** | The skill pointer prefix | **decided (owner): as recommended; built** | Default: the mount folder's name slugified; the prefix matches `^[a-z0-9][a-z0-9-]*$` (`tools/common/slug.mjs`); the whole pointer name is at most 64 characters, else a problem and only that pointer is skipped. |
+| **D-COMMIT-OPT-IN** | The name of the key that lets a personal inside mount's pointers be committed | **decided (owner): `skills.tracked`; built** | `skills.tracked: true`, setup flag `--tracked-pointers`; replaces `skills.commit`. Rejected: `skills.commit`. |
+| Q1 | Qwen Code: context-file loading across a `.git` boundary, an exclude setting, skills from a subfolder | open | Until known, Qwen gets items 3 and 4 and the guards wired in `.qwen/`, not items 1, 2 and 5. Codex gets item 3 only and no oikos guard at all (`.codex/hooks.json` holds only akmon's hooks; ADR 0007 D03, task L5). |
 | Q2 | A mount's own skills load lazily next to the pointers (no switch), so a skill may be listed twice | leaning | Accept; the prefix keeps the names apart. Check live. |
 | Q3 | `<mount>/.claude/settings.local.json` read at the submodule's root | open | Check live: settings.local.json follows the git root since v2.1.211. |
-| Q4 | Shell coverage: the known gaps of L2 (globs, `find -exec`) | leaning | Accept; the file tools and the `vault` tool are the main routes. |
+| Q4 | Shell coverage: the known gaps of L2 (globs, `find -exec`) and other writing programs | decided (owner): accepted gap | Accepted with D-A9-AUDIT2-GAPS, task L5; the file tools and the `vault` tool are the main routes. |
 
 ## Rejected (candidates)
 
@@ -455,6 +519,14 @@ installations). S2 is behaviour-preserving and may start at once.
   Rejected by the owner: the root is the work repository, `.local/` is never one, and private
   material lives in a separate installation (§ Linked installations). *Revisit if* a separate
   installation leaves a gap.
+- **A transfer's findings only advise** (D-A11-TRANSFER-REFUSE B). Short of "no leak in either
+  direction": the write guard sees only that a dry run came first. *Revisit if* false findings on
+  transfers become common and an `allow:` line is too coarse.
+- **A binary transfer with the dry run saying its content was not checked**
+  (D-A11-TRANSFER-BINARY B). *Revisit if* binary material must move between installations.
+- **Executable note content, or the guard files, left as accepted gaps** (D-A9-NOTE-EXEC B,
+  D-A9-GUARD-FILES B). Both checks are cheap, and Obsidian and an unlocked guard act outside every
+  hook.
 
 ## To verify (live, by the owner)
 
@@ -470,8 +542,8 @@ one outside, in the local layer), a skills mount, and a second installation besi
 
 - `sync` wiring:
   - `sync` writes items 1–3 with absolute paths only in local files; a second run changes nothing;
-  - a user's own `claudeMdExcludes` entries and other keys stay; removing an entry removes its
-    wiring;
+  - a user's own `claudeMdExcludes` entries and other keys stay; removing an entry keeps its
+    wiring with a note, and `sync --prune` removes exactly that wiring;
   - a mount's `settings.local.json` lands in its `.git/info/exclude` when not ignored.
 - `sync --check` is red for: a missing mount, a mount under `.local/`, overlapping mounts, two
   wikis with one name, two defaults, stale wiring.
@@ -482,17 +554,31 @@ one outside, in the local layer), a skills mount, and a second installation besi
 - The write guard:
   - denies Edit/Write, a shell redirection and `git -C <mount> commit` into every mount, a wiki
     mount included;
+  - denies a file-tool edit of `.local/{mounts,outgoing}.yaml`, `.local/sync.json`, and of the
+    `hooks`, `disableAllHooks`, `claudeMdExcludes` keys of the host settings files;
+  - denies a write reached through a link, a `..` after a link or a case variant of a mount path;
   - allows reads.
 - The leak check of the `vault` connector:
   - refuses a note that names the installation's root, a `.local/` path or a
-    `.local/outgoing.yaml` term;
+    `.local/outgoing.yaml` term, also when the term is split by emphasis, a zero-width character
+    or a line break;
   - refuses a note that names oikos, unless the mount sets `mention_assistant: allow`;
+  - refuses a `dataviewjs` block, `$=`, `<%`, `<script>`, `<iframe>` or a remote embed unless
+    `wiki.rules` allows it;
+  - refuses a target under `skills.from`, a `SKILL.md`, a dot folder, a rule file, a link out of
+    the mount, a hard-linked note;
+  - ignores an `allow:` entry shorter than 8 characters and lists each line an entry let pass;
   - passes a clean note.
 - The boundary (A11):
   - a read of an unregistered installation is denied, a read of a registered one is allowed;
+  - a search scoped above the installation root and a shell command naming an unregistered
+    installation are denied;
   - a write into either is denied;
-  - `setup transfer --dry-run` lists the direction's findings and writes nothing.
-- `git-guard` takes the target repository from `-C` and from `cd`.
+  - `setup transfer --dry-run` lists the findings of both installations' terms and writes
+    nothing; a finding refuses the real run; a binary source, a source in a closed store or
+    `.env*`, and a `--to` outside this installation or into a guarded place are refused.
+- `git-guard` takes the target repository from `-C`, `cd`, `--git-dir`, `--work-tree`, `GIT_DIR`
+  and `GIT_WORK_TREE`; submodule recursion, `clean -ff` and a read with `-c` count as writes.
 - The `vault` tool:
   - search across both wikis with the wiki named per hit, and with `--wiki`; read;
   - create in the default wiki and in a named one, from the template, with the frontmatter
@@ -504,7 +590,10 @@ one outside, in the local layer), a skills mount, and a second installation besi
 `tools/common/config.mjs`, `tools/common/paths.mjs`, `tools/sync/cli.mjs`, `tools/sync/mounts.mjs`
 (new), `tools/hooks/shell.mjs` (new), `tools/hooks/package-guard.mjs`, `tools/hooks/git-guard.mjs`,
 `tools/hooks/leaks.mjs`, `tools/hooks/session-start.mjs`, `tools/hooks/writes.mjs`,
-`tools/common/outgoing.mjs` (derived terms), `tools/setup/cli.mjs`, `tools/landscape/cli.mjs`,
-`tools/vault/cli.mjs` (new), `tools/common/tracking-config.mjs` (splicer moved out),
+`tools/hooks/mounts-lock.mjs` (new), `tools/common/outgoing.mjs` (derived and linked terms, the
+`allow:` rules, normalisation), `tools/common/slug.mjs` (new), `tools/common/mount-config.mjs` and
+`tools/common/mount-skills.mjs` (new), `tools/setup/cli.mjs`, `tools/setup/mount.mjs` (new),
+`tools/landscape/cli.mjs`, `tools/vault/cli.mjs` (new), `tools/common/yaml-splice.mjs` (new, the
+splicer moved out of `tools/common/tracking-config.mjs`),
 `skills/wiki/SKILL.md`, `skills/wiki/connectors/vault.md` (new), `examples/installation/oikos.yaml`,
 OIKOS.md, DEVELOPMENT.md, BOOTSTRAP.md, tests.

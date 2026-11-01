@@ -352,6 +352,27 @@ test('the command table: reads run, writes need their dry run, the rest and dire
   for (const command of TABLE.http) assert.match(reason(s.shell(command)), /direct write to a connected service .* use the oikos tool with --dry-run/, command);
 });
 
+test('sync --prune is a guarded write (an option entry of writes.mjs): its dry run, then an answered prompt; plain sync is free', () => {
+  const sync = 'node oikos/tools/sync/cli.mjs';
+  const s = session('Bash', INST);
+  for (const command of [sync, `${sync} --check`, `${sync} --dry-run`, `${sync} && ${sync} --check`, `${sync} --check | tail -3`]) assert.equal(s.shell(command), null, command);
+
+  assert.match(reason(s.shell(`${sync} --prune`)), /sync --prune changes a remote service\. Run the same command with --dry-run first/);
+  assert.equal(s.shell(`${sync} --prune --dry-run`), null, 'the dry run runs');
+  assert.match(reason(s.shell(`${sync} --prune`)), /the dry run of sync --prune has not been answered yet/);
+  s.prompt();
+  assert.equal(s.shell(`${sync} --prune`), null, 'the same command after the user had the word');
+  assert.match(reason(s.shell(`${sync} --prune`)), /Run the same command with --dry-run first/, 'one run per dry run');
+
+  // the option counts wherever it stands, and --help excuses nothing: sync takes it for nothing
+  for (const command of [`${sync} --check --prune`, `${sync} --prune --help`, `${sync} --help --prune`]) {
+    assert.match(reason(s.shell(command)), /sync --prune changes a remote service/, command);
+  }
+  assert.equal(s.shell(`${sync} --dry-run --prune`), null, 'a dry run, the option after it');
+  assert.equal(signature(classify(`${sync} --dry-run --prune`, INST).call, INST), signature(classify(`${sync} --prune`, INST).call, INST), 'the same command, with or without --dry-run');
+  for (const command of [`${sync} --prune && echo done`, `bash -c "${sync} --prune"`, `${sync} --prune > out.txt`]) assert.ok(denied(s.shell(command)), command);
+});
+
 test('a write inside bash -c, sh -c or eval is denied: the tool call runs as a standalone command', () => {
   const s = session('Bash', INST);
   const nested = [
@@ -552,6 +573,24 @@ test('classify: curl and wget config files are found where the command\'s own en
   // The hook looks the files up from its own environment too.
   assert.match(reason(session('Bash', INST, { HOME: empty }).shell(`HOME=${dir} curl -s ${url}`)), /direct write to a connected service/);
 });
+
+for (const shellTool of SHELLS) {
+  test(`${shellTool}: a vault note is a guarded write — dry run, a user prompt, then the same command; search and read pass (ADR 0007 D04)`, () => {
+    const write = 'node tools/vault/cli.mjs create --title Idea --wiki own --folder inbox --file note.md';
+    const s = session(shellTool);
+    assert.equal(s.shell('node tools/vault/cli.mjs search --query importer'), null);
+    assert.equal(s.shell('node tools/vault/cli.mjs read --note idea'), null);
+    const bare = s.shell(write);
+    assert.ok(denied(bare), JSON.stringify(bare));
+    assert.match(reason(bare), /vault create changes/);
+    assert.equal(s.shell(`${write} --dry-run`), null);
+    s.prompt();
+    assert.equal(s.shell(write), null);
+    assert.ok(denied(s.shell(write)), 'the confirmed dry run is used up by the run');
+    assert.ok(denied(s.shell('node tools/vault/cli.mjs append --note idea --text x')), 'append is a write too');
+    assert.ok(denied(s.shell('node tools/vault/cli.mjs replace-section --note idea --heading H --text x')), 'and replace-section');
+  });
+}
 
 test('the lexer keeps a backslash in double quotes unless bash drops it', () => {
   const [{ tokens }] = shellSegments('x "\\--help" "\\$a" "a\\\nb" c\\\nd');

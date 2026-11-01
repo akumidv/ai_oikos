@@ -2,7 +2,7 @@
 // problems, what sync wires per mount (rule exclusions both ways, the outside mount's directory, the
 // mount's .git/info/exclude, the record in .local/sync.json), the check that goes red, the package
 // guard that keeps file tools out of every mount, and the session-start lines. (The files that declare
-// the mounts, the narrowing rule, `skills.commit` and `setup mount` are in mounts-edit.test.mjs.) Each test makes a
+// the mounts, the narrowing rule, `skills.tracked` and `setup mount` are in mounts-edit.test.mjs.) Each test makes a
 // temporary installation (ACME Corp) with real `git init` mounts: `vaults/team` (a nested wiki),
 // `projects/dev-root` (a skills mount) and an outside wiki in the local layer. Nothing here reaches
 // the network.
@@ -23,7 +23,7 @@ test('config merges the two layers by real path, the local entry replacing the s
   assert.deepEqual({ root: t.root, use: t.use, skills: t.skills, wiki: t.wiki }, {
     root: team, use: ['wiki'], skills: null, wiki: { name: 'team', rules: 'NOTES.md', template: null, inbox: 'inbox/', default: false },
   });
-  assert.deepEqual(before.mounts[1].skills, { from: '.claude/skills', prefix: 'dev', only: ['deploy-status'], commit: false });
+  assert.deepEqual(before.mounts[1].skills, { from: '.claude/skills', prefix: 'dev', only: ['deploy-status'], tracked: false });
   assert.equal(before.mounts[2].wiki.default, true);
 
   // the personal layer names the shared mount by its absolute path: the same real path, so it replaces it
@@ -34,7 +34,7 @@ test('config merges the two layers by real path, the local entry replacing the s
   assert.equal(after.mounts.length, 2, 'one mount per real path');
   assert.deepEqual(after.mounts.map((m) => m.path), [team, 'projects/dev-root'], 'the local entry takes the shared entry\'s place');
   assert.deepEqual({ layer: after.mounts[0].layer, use: after.mounts[0].use, wiki: after.mounts[0].wiki, skills: after.mounts[0].skills },
-    { layer: 'local', use: ['skills'], wiki: null, skills: { from: '.claude/skills', prefix: 'team', only: null, commit: false } }, 'nothing of the replaced entry is kept');
+    { layer: 'local', use: ['skills'], wiki: null, skills: { from: '.claude/skills', prefix: 'team', only: null, tracked: false } }, 'nothing of the replaced entry is kept');
 });
 
 test('config reports a mount that cannot be one, each with its place', () => {
@@ -124,7 +124,7 @@ test('sync wires the mounts, writes absolute paths only into local files, and a 
   assert.equal(check.status, 0, check.stdout + check.stderr);
 });
 
-test('sync keeps the person\'s own entries and keys, and removing a mount removes exactly its wiring', () => {
+test('sync keeps the person\'s own entries and keys; a mount that has gone keeps its wiring until sync --prune removes exactly that', () => {
   const { dir, team, dev, own } = mounted();
   // what the person and the mount's own framework wrote already, one entry of it the same as sync's
   write(join(dir, '.claude', 'settings.local.json'), JSON.stringify({ model: 'kept', claudeMdExcludes: ['/mine/**/CLAUDE.md'], permissions: { allow: ['Bash(ls)'], additionalDirectories: ['/mine'] } }));
@@ -148,10 +148,32 @@ test('sync keeps the person\'s own entries and keys, and removing a mount remove
   assert.ok(!record[team].excludes.includes(`${dir}/CLAUDE.md`), 'an entry that was there is the person\'s, not sync\'s');
   assert.equal(record[dev].ignored, undefined);
 
-  // drop the shared wiki, the skills mount and the personal wiki: only what sync wrote goes
+  // drop the shared wiki, the skills mount and the personal wiki: plain sync reports their wiring and keeps all of it
   write(join(dir, 'oikos.yaml'), readFileSync(join(dir, 'oikos.yaml'), 'utf8').replace(/\nmounts:[\s\S]*$/, '\n'));
   write(join(dir, '.local', 'mounts.yaml'), 'mounts:\n');
-  const removal = sync(dir);
+  const files = [join(dir, '.claude', 'settings.local.json'), join(team, '.claude', 'settings.local.json'), join(dev, '.claude', 'settings.local.json'), join(team, '.git', 'info', 'exclude'), join(dir, '.local', 'sync.json')];
+  const snapshot = () => files.map((file) => (existsSync(file) ? readFileSync(file, 'utf8') : null));
+  const before = snapshot();
+  const kept = sync(dir);
+  assert.equal(kept.status, 0, kept.stdout + kept.stderr);
+  for (const root of [team, dev, own]) assert.match(kept.stdout, new RegExp(`^note: the mount ${root} is no longer configured; its wiring is kept \\(.*--prune --dry-run`, 'm'));
+  assert.match(kept.stdout, /1 line in .*\/vaults\/team\/\.git\/info\/exclude/);
+  assert.doesNotMatch(kept.stdout, /^wrote:/m);
+  assert.deepEqual(snapshot(), before, 'nothing of the wiring goes');
+  assert.equal(sync(dir, '--check').status, 0, 'a mount that has gone is a note, not drift');
+
+  // the dry run of the removal lists it and writes nothing; the removal takes exactly what sync wrote
+  const dry = sync(dir, '--prune', '--dry-run');
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+  assert.match(dry.stdout, /^would write: \.claude\/settings\.local\.json claudeMdExcludes$/m);
+  assert.match(dry.stdout, /dry run: nothing written/);
+  assert.doesNotMatch(dry.stdout, /^note: the mount/m);
+  assert.deepEqual(snapshot(), before, 'a dry run writes nothing');
+  // after `--` an option is a positional, as the write guard reads it: `-- --prune` takes nothing away
+  const hidden = sync(dir, '--', '--prune');
+  assert.equal(hidden.status, 0, hidden.stdout + hidden.stderr);
+  assert.deepEqual(snapshot(), before, 'an option after -- is not read');
+  const removal = sync(dir, '--prune');
   assert.equal(removal.status, 0, removal.stdout + removal.stderr);
   const after = readJson(join(dir, '.claude', 'settings.local.json'));
   assert.deepEqual(after.claudeMdExcludes, ['/mine/**/CLAUDE.md']);
@@ -182,9 +204,10 @@ test('sync --check is red for a mount that is wrong and for wiring that is missi
   writeFileSync(join(ok.dir, '.claude', 'settings.local.json'), JSON.stringify({ ...local, claudeMdExcludes: [] }));
   assert.match(sync(ok.dir, '--check').stdout, /out of date: \.claude\/settings\.local\.json claudeMdExcludes/);
   assert.equal(sync(ok.dir).status, 0);
-  // stale: the entry is gone from the configuration, its wiring is still there
+  // stale: the entry is gone from the configuration, its wiring is still there — a note, and drift only for the removal
   write(join(ok.dir, '.local', 'mounts.yaml'), 'mounts:\n');
-  const stale = sync(ok.dir, '--check');
+  assert.equal(sync(ok.dir, '--check').status, 0);
+  const stale = sync(ok.dir, '--prune', '--check');
   assert.equal(stale.status, 1);
   assert.match(stale.stdout, /out of date: \.claude\/settings\.local\.json additionalDirectories/);
 });
@@ -261,6 +284,8 @@ test('a mount whose .git is a file (a submodule) gets its exclude line in the re
 
   write(yaml, readFileSync(yaml, 'utf8').replace('  vaults/sub: ~\n', ''));
   assert.equal(sync(dir).status, 0);
+  assert.match(readFileSync(exclude, 'utf8'), /settings\.local\.json/, 'plain sync keeps the line');
+  assert.equal(sync(dir, '--prune').status, 0);
   assert.doesNotMatch(readFileSync(exclude, 'utf8'), /settings\.local\.json/, 'the line goes with the mount');
   assert.ok(!existsSync(join(sub, '.claude', 'settings.local.json')));
 });

@@ -56,7 +56,7 @@ export const HOSTS = {
     matchers: {
       session: 'startup|resume|clear|compact',
       shell: '^run_shell_command$',
-      file: '^(read_file|grep_search|glob|list_directory|edit|write_file|notebook_edit)$',
+      file: '^(read_file|grep_search|glob|list_directory|zoom_image|lsp|edit|write_file|notebook_edit)$',
       agent: '^agent$',
     },
   },

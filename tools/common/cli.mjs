@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { HttpError, ChannelError } from './http.mjs';
 import { INSTALL_FILE, installPath, installRoot } from './paths.mjs';
 import { config, listedConnectors } from './config.mjs';
+import { usableWikis } from './mounts.mjs';
 
 /**
  * commands: { name: { help, options, run(values, positionals) } }
@@ -93,6 +94,12 @@ export class GuardRefusal extends Error {}
 export function requireConnector(name) {
   if (!installRoot()) installPath();
   if (listedConnectors().has(name)) return;
+  // `vault` is derived from the mounts (ADR 0007 D04): any wiki mount without a problem makes it available.
+  if (name === 'vault') {
+    if (usableWikis(config().mounts, config().problems).length) return;
+    throw new UsageError('no usable wiki mount — a mount with `use: [wiki]` and no problem makes the connector available '
+      + `(node oikos/tools/setup/cli.mjs mount add … --use wiki; node oikos/tools/landscape/cli.mjs mounts lists them)${config().problems.length ? `; ${config().problems.join('; ')}` : ''}`);
+  }
   const { problems } = config();
   throw new UsageError(`${name} is not a connector of this installation — add it under connectors: in ${INSTALL_FILE} `
     + `(node oikos/tools/landscape/cli.mjs skills lists them)${problems.length ? `; ${problems.join('; ')}` : ''}`);

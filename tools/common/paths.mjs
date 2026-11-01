@@ -12,8 +12,8 @@
 // A folder is an installation when it holds `oikos.yaml` or an `oikos` entry leading to this core;
 // the core itself never is one. None found is an error for a tool that needs it, never a fallback
 // to the core — the core keeps nothing of any installation.
-import { existsSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CORE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -37,15 +37,100 @@ const isDir = (path) => {
   }
 };
 
-/** The real path of `path`, through the nearest folder that exists (a new file is not there yet). */
-export function realOf(path) {
-  const rest = [];
-  let at = resolve(path);
-  while (!existsSync(at) && dirname(at) !== at) {
-    rest.unshift(basename(at));
-    at = dirname(at);
+const MAX_LINKS = 40;
+const SEPARATORS = sep === '\\' ? /[\\/]+/ : /\/+/;
+/** The components of `text` after its root, the last first: the stack {@link realOf} works through. `.` and empty names are left out. */
+const stackOf = (text) => text.slice(parse(text).root.length).split(SEPARATORS).filter((name) => name !== '' && name !== '.').reverse();
+
+/** What the name `path` is: where it points when a symbolic link, null when a file or a folder, undefined when there is nothing (or it cannot be read); remembered in `known`. */
+function linkOf(path, known) {
+  if (known?.has(path)) return known.get(path);
+  let found;
+  try {
+    found = lstatSync(path).isSymbolicLink() ? readlinkSync(path) : null;
+  } catch {
+    found = undefined;
   }
-  return join(real(at) || at, ...rest);
+  known?.set(path, found);
+  return found;
+}
+
+/**
+ * The real path of `path` (relative to `from`, the working folder by default), resolved component by
+ * component as ADR 0007 D02 says: each symbolic link followed before the next `..` is applied (`link/..`
+ * is the parent of what `link` leads to, never of `link`), the last component included. What does not
+ * exist yet — a new file — is appended to the nearest folder that does, `.` and `..` applied to it as
+ * written. The shell's own `cd` is logical (`cd link/..` stays above `link`); a file operation is not.
+ * @param {string} path
+ * @param {string} [from]
+ * @param {Map<string, string|null|undefined>} [known] what earlier calls found at a name, to be reused by a caller that resolves many paths at once (valid while the file system does not change under it)
+ * @returns {string}
+ */
+export function realOf(path, from = process.cwd(), known) {
+  const text = String(path);
+  const absolute = isAbsolute(text) ? text : `${resolve(from)}${sep}${text}`;
+  const stack = stackOf(absolute);
+  let current = parse(absolute).root;
+  let links = 0;
+  while (stack.length) {
+    const name = stack.pop();
+    if (name === '..') {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, name);
+    const target = linkOf(next, known);
+    if (target === undefined || (target !== null && ++links > MAX_LINKS)) return resolve(next, ...stack.reverse());
+    if (target === null) {
+      current = next;
+      continue;
+    }
+    if (isAbsolute(target)) current = parse(target).root;
+    stack.push(...stackOf(target));
+  }
+  return current;
+}
+
+/**
+ * The real paths a file tool's `path` may reach — one, or two when they differ: the one {@link realOf}
+ * gives (a link followed before the next `..`, as the kernel does), and the one of the path with its `..`
+ * collapsed as text first, which is what a host does before it opens the file (`inst/oikos/../vault/x`
+ * is then `inst/vault/x`, not a path above the core). A guard judges both and denies when either is denied.
+ * @param {string} path
+ * @param {string} [from]
+ * @param {Map<string, string|null|undefined>} [known] as for {@link realOf}
+ * @returns {string[]}
+ */
+export function realForms(path, from = process.cwd(), known) {
+  const kernel = realOf(path, from, known);
+  const collapsed = realOf(resolve(from, String(path)), from, known);
+  return kernel === collapsed ? [kernel] : [kernel, collapsed];
+}
+
+/**
+ * The identity of the file or folder `path` — its device and inode, as one string — or null when it does
+ * not exist or the file system gives none. Two paths that name one file, however they are spelled
+ * (a case variant on a file system that folds case, a bind mount, a link), have one identity.
+ * @param {string} path
+ * @returns {string|null}
+ */
+export function idOf(path) {
+  try {
+    const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+    return stat === undefined || stat.ino === 0n ? null : `${stat.dev}:${stat.ino}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `a` and `b` name one file: the same real path, or — a case variant on a file system that folds
+ * case — the same folder and the same name up to case. Judged on the paths as {@link realOf} gives them.
+ */
+export function sameFile(a, b) {
+  if (a === b) return true;
+  const folder = idOf(dirname(a));
+  return folder !== null && folder === idOf(dirname(b)) && basename(a).toLowerCase() === basename(b).toLowerCase();
 }
 
 /** Whether the real path `path` is `dir` itself or inside it (both real, as realOf gives them). */
@@ -58,7 +143,7 @@ export function isWithin(path, dir) {
  * The real root of a mount declared as `path` in the configuration: absolute, or relative to the
  * installation `root`, with every link resolved (a mount may be a link, a submodule, a mount point).
  */
-export const mountRoot = (root, path) => realOf(resolve(root, path));
+export const mountRoot = (root, path) => realOf(path, root);
 
 /** Whether `dir` is a repository top: it has a `.git` of its own, a folder or a submodule's file. */
 export const isRepoTop = (dir) => existsSync(join(dir, '.git'));

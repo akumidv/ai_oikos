@@ -21,7 +21,7 @@ import YAML from 'yaml';
 import { installRoot, localPath, INSTALL_FILE } from './paths.mjs';
 import { taskTrackingProblems } from './transitions.mjs';
 import { deskProblems } from './desk.mjs';
-import { LOCAL_MOUNTS_FILE, resolveMounts } from './mounts.mjs';
+import { LOCAL_MOUNTS_FILE, resolveMounts, scanMountKeys } from './mounts.mjs';
 
 /** The installation's `oikos.yaml`, or null outside an installation. */
 export const configFile = () => (installRoot() ? join(installRoot(), INSTALL_FILE) : null);
@@ -30,23 +30,17 @@ const isMap = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
 let cached;
 /**
- * { organization, connectors, settings, mcp_servers, brand, 'task-tracking', agents, desk, mounts, problems }
+ * { organization, connectors, settings, mcp_servers, brand, 'task-tracking', agents, desk, mounts, guarded, problems }
  * — every part present, maybe empty (`agents` is a list of names, `mounts` the resolved mounts of
- * both layers, see mounts.mjs). A malformed `task-tracking` or `desk` part is kept as written; its
+ * both layers, `guarded` the roots the guards keep closed: those of every key of `mounts:`, problem entries
+ * and the keys of a file that does not parse included, see mounts.mjs). A malformed `task-tracking` or `desk` part is kept as written; its
  * problems, each with its path, are in `problems`.
  */
 export function config() {
   if (cached) return cached;
   const problems = [];
-  let raw = {};
-  const file = configFile();
-  if (file && existsSync(file)) {
-    try {
-      raw = YAML.parse(readFileSync(file, 'utf8')) || {};
-    } catch (e) {
-      problems.push(`${INSTALL_FILE} does not parse (${e.message.split('\n')[0]})`);
-    }
-  }
+  const unread = { shared: [], local: [] }; // the keys of a mounts file that does not parse, found by scanning it: guarded, not mounts
+  const raw = installFile(problems, unread);
   const part = (key) => {
     if (raw[key] === undefined || raw[key] === null) return {}; // a key with only comments under it
     if (isMap(raw[key])) return raw[key];
@@ -64,29 +58,46 @@ export function config() {
   let agents = [];
   if (isMap(raw.agents)) problems.push(`${INSTALL_FILE}: 'agents' must be a list of agent names`);
   else if (raw.agents !== undefined && raw.agents !== null) agents = (Array.isArray(raw.agents) ? raw.agents : String(raw.agents).split(',')).map((a) => String(a).trim()).filter(Boolean);
-  const mounts = mountsOf(part('mounts'), problems);
+  const { mounts, guarded } = mountsOf(part('mounts'), unread, problems);
   cached = {
     organization: part('organization'), connectors, settings: part('settings'), mcp_servers: part('mcp_servers'), brand: part('brand'),
-    'task-tracking': taskTracking, agents: [...new Set(agents)], desk, mounts, problems,
+    'task-tracking': taskTracking, agents: [...new Set(agents)], desk, mounts, guarded, problems,
   };
   return cached;
 }
 
-/** The resolved mounts of the shared layer `shared` and `.local/mounts.yaml`; their problems are pushed to `problems`. */
-function mountsOf(shared, problems) {
-  if (!installRoot()) return [];
-  const resolved = resolveMounts(installRoot(), shared, localMounts(problems));
-  problems.push(...resolved.problems);
-  return resolved.mounts;
+/** The parsed `oikos.yaml`, `{}` when it is absent or does not parse (a problem said, and its `mounts:` keys scanned into `unread.shared`). */
+function installFile(problems, unread) {
+  const file = configFile();
+  if (!file || !existsSync(file)) return {};
+  let text = '';
+  try {
+    text = readFileSync(file, 'utf8');
+    return YAML.parse(text) || {};
+  } catch (e) {
+    problems.push(`${INSTALL_FILE} does not parse (${e.message.split('\n')[0]})`);
+    unread.shared = scanMountKeys(text);
+    return {};
+  }
 }
 
-/** The `mounts:` mapping of the installation's `.local/mounts.yaml` (the personal layer), empty when absent; a bad file is a problem. */
-function localMounts(problems) {
+/** The resolved mounts and guarded roots of the shared layer `shared` and `.local/mounts.yaml`; their problems are pushed to `problems`. `unread` holds the keys of a file that did not parse. */
+function mountsOf(shared, unread, problems) {
+  if (!installRoot()) return { mounts: [], guarded: [] };
+  const resolved = resolveMounts(installRoot(), shared, localMounts(problems, unread), unread);
+  problems.push(...resolved.problems);
+  return { mounts: resolved.mounts, guarded: resolved.guarded };
+}
+
+/** The `mounts:` mapping of the installation's `.local/mounts.yaml` (the personal layer), empty when absent; a bad file is a problem, and its keys are scanned into `unread.local` so they stay guarded. */
+function localMounts(problems, unread) {
   const file = localPath(LOCAL_MOUNTS_FILE);
   const label = `.local/${LOCAL_MOUNTS_FILE}`;
   if (!existsSync(file)) return {};
+  let text = '';
   try {
-    const raw = YAML.parse(readFileSync(file, 'utf8')) || {};
+    text = readFileSync(file, 'utf8');
+    const raw = YAML.parse(text) || {};
     if (!isMap(raw)) throw new Error('the top level must be a mapping with `mounts:`');
     for (const key of Object.keys(raw)) if (key !== 'mounts') problems.push(`${label}: unknown key '${key}' (mounts)`);
     if (raw.mounts === undefined || raw.mounts === null) return {};
@@ -94,6 +105,7 @@ function localMounts(problems) {
     problems.push(`${label}: 'mounts' must be a mapping`);
   } catch (e) {
     problems.push(`${label} does not parse (${e.message.split('\n')[0]})`);
+    unread.local = scanMountKeys(text);
   }
   return {};
 }

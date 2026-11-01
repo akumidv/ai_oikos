@@ -7,7 +7,7 @@
 // the network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import YAML from 'yaml';
@@ -143,16 +143,16 @@ test('an outside mount\'s pointer and every local-layer pointer go to the instal
   assert.deepEqual(record[ext].installIgnored, ['.claude', '.qwen'].map((h) => `/${h}/skills/ext-report/SKILL.md`));
   assert.equal(record[join(dir, 'projects', 'dev-root')].installIgnored, undefined, 'a committed pointer has no ignore line');
 
-  // the outside entry goes: its pointers and exactly its lines go, the person's lines and the others' stay
+  // the outside entry goes: with --prune its pointers and exactly its lines go, the person's lines and the others' stay
   write(join(dir, '.local', 'mounts.yaml'), 'mounts:\n  vaults/mine:\n    use: [skills]\n');
-  assert.equal(sync(dir).status, 0);
+  assert.equal(sync(dir, '--prune').status, 0);
   assert.ok(!existsSync(join(dir, '.claude', 'skills', 'ext-report')));
   assert.ok(!existsSync(join(dir, '.qwen', 'skills', 'ext-report')));
   assert.deepEqual(excludeLines(dir), ['/scratch/', ...own.filter((l) => l.includes('mine-journal'))]);
 
   // the local layer goes altogether
   rmSync(join(dir, '.local', 'mounts.yaml'));
-  assert.equal(sync(dir).status, 0);
+  assert.equal(sync(dir, '--prune').status, 0);
   assert.ok(!existsSync(join(dir, '.claude', 'skills', 'mine-journal')));
   assert.equal(read(join(dir, '.git', 'info', 'exclude')), '# mine\n/scratch/\n');
   assert.ok(existsSync(join(dir, '.claude', 'skills', 'dev-deploy-status', 'SKILL.md')));
@@ -173,6 +173,43 @@ test('a pointer leaves with its skill, and its ignore line with it', () => {
   assert.ok(!excludeLines(dir).some((l) => l.includes('ext-second')));
   assert.ok(excludeLines(dir).some((l) => l.includes('ext-report')));
   assert.deepEqual(JSON.parse(read(join(dir, '.local', 'sync.json'))).mounts[ext].pointers, ['ext-report']);
+});
+
+test('a mount that has gone keeps its pointers and ignore lines until sync --prune takes them (D-A9-GUARD-FILES)', () => {
+  const { dir, ext, mine } = world();
+  assert.equal(sync(dir).status, 0);
+  const pointerFiles = [...pointersOf(dir, 'ext-report'), ...pointersOf(dir, 'mine-journal')];
+  assert.ok(pointerFiles.every((file) => existsSync(file)));
+  const exclude = join(dir, '.git', 'info', 'exclude');
+  const recorded = () => JSON.parse(read(join(dir, '.local', 'sync.json'))).mounts;
+  const before = [read(exclude), read(join(dir, '.local', 'sync.json'))];
+  assert.ok(excludeLines(dir).some((l) => l.includes('ext-report')));
+
+  // the personal layer no longer declares them (the file lost, emptied, mistyped: sync cannot tell which)
+  write(join(dir, '.local', 'mounts.yaml'), 'mounts:\n');
+  const kept = sync(dir);
+  assert.equal(kept.status, 0, kept.stdout + kept.stderr);
+  assert.match(kept.stdout, new RegExp(`^note: the mount ${ext} is no longer configured; its wiring is kept \\(.*the pointers ext-report`, 'm'));
+  assert.match(kept.stdout, new RegExp(`^note: the mount ${mine} is no longer configured;.*the pointers mine-journal`, 'm'));
+  assert.doesNotMatch(kept.stdout, /stale/);
+  assert.ok(pointerFiles.every((file) => existsSync(file)), 'the pointers stay');
+  assert.deepEqual([read(exclude), read(join(dir, '.local', 'sync.json'))], before, 'the ignore lines and the record stay');
+  assert.equal(sync(dir, '--check').status, 0, 'a note, not drift');
+
+  const dry = sync(dir, '--prune', '--dry-run');
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+  assert.match(dry.stdout, /^would write: \.claude\/skills\/ext-report \(stale\)$/m);
+  assert.match(dry.stdout, /^would write: \.git\/info\/exclude \(skill pointers\)$/m);
+  assert.ok(pointerFiles.every((file) => existsSync(file)), 'a dry run removes nothing');
+  assert.deepEqual([read(exclude), read(join(dir, '.local', 'sync.json'))], before);
+
+  const pruned = sync(dir, '--prune');
+  assert.equal(pruned.status, 0, pruned.stdout + pruned.stderr);
+  assert.ok(pointerFiles.every((file) => !existsSync(file)), 'the pointers go');
+  assert.ok(!excludeLines(dir).some((l) => /ext-report|mine-journal/.test(l)), 'and their ignore lines');
+  assert.equal(recorded()[ext], undefined);
+  assert.ok(existsSync(join(dir, '.claude', 'skills', 'dev-deploy-status', 'SKILL.md')), 'the configured mounts keep theirs');
+  assert.equal(sync(dir, '--check').status, 0);
 });
 
 test('a second sync changes nothing, and --check is red for a pointer or an ignore line that is gone', () => {
@@ -211,14 +248,51 @@ test('an unknown skills.only name and a missing skills.from folder are problems'
   assert.match(red.stdout, /problem: oikos\.yaml: mounts\.tools\/Ops_Kit: skills\.from: skillz does not exist in the mount/);
 });
 
-test('a prefix that is not a plain name is a problem and writes nothing outside the host folder', () => {
+test('a prefix that is not a plain lowercase name is a problem: nothing is written for that mount, and sync does not crash', () => {
+  for (const bad of ['../../escape', 'Dev', 'dev_x', '-dev', '']) {
+    const { dir } = world();
+    write(join(dir, 'oikos.yaml'), read(join(dir, 'oikos.yaml')).replace('prefix: dev,', `prefix: ${JSON.stringify(bad)},`));
+    const run = sync(dir);
+    assert.equal(run.status, 1, bad);
+    assert.match(run.stdout, /problem: oikos\.yaml: mounts\.projects\/dev-root: skills\.prefix: must be lowercase letters, digits and -, starting with a letter or digit/, bad);
+    assert.ok(!existsSync(join(dir, 'escape-deploy-status')), bad);
+    const pointers = readdirSync(join(dir, '.claude', 'skills'));
+    assert.ok(!pointers.some((name) => name.includes('deploy-status')), `${bad}: no pointer is made for the mount`);
+    assert.ok(pointers.includes('ops-kit-rollout'), `${bad}: the other mounts are wired`);
+  }
+});
+
+test('the default prefix is the folder name slugified; one that holds no letter or digit is a problem', () => {
   const { dir } = world();
-  write(join(dir, 'oikos.yaml'), read(join(dir, 'oikos.yaml')).replace('prefix: dev,', 'prefix: ../../escape,'));
+  const dots = repository(join(dir, 'tools', '..My  Kit__2.'));
+  skill(dots, '.claude/skills', 'one');
+  const bare = repository(join(dir, 'tools', '___'));
+  skill(bare, '.claude/skills', 'two');
+  write(join(dir, 'oikos.yaml'), `${read(join(dir, 'oikos.yaml'))}  "tools/..My  Kit__2.": { use: [skills] }\n  tools/___: { use: [skills] }\n`);
   const run = sync(dir);
   assert.equal(run.status, 1);
-  assert.match(run.stdout, /problem: oikos\.yaml: mounts\.projects\/dev-root: skills\.prefix: must be letters, digits/);
-  assert.ok(!existsSync(join(dir, 'escape-deploy-status')));
-  assert.ok(existsSync(join(dir, '.claude', 'skills', 'dev-root-deploy-status', 'SKILL.md')), 'the path\'s last folder is used instead');
+  assert.ok(existsSync(join(dir, '.claude', 'skills', 'my-kit-2-one', 'SKILL.md')), 'runs of other characters are one -, none at the ends');
+  assert.match(run.stdout, /problem: oikos\.yaml: mounts\.tools\/___: skills\.prefix: the folder name '___' holds no letter or digit to make one from — set skills\.prefix/);
+  assert.ok(!readdirSync(join(dir, '.claude', 'skills')).some((name) => name.endsWith('-two') || name === '-two' || name === 'two'));
+  const fixed = read(join(dir, 'oikos.yaml')).replace('tools/___: { use: [skills] }', 'tools/___: { use: [skills], skills: { prefix: under } }');
+  write(join(dir, 'oikos.yaml'), fixed);
+  assert.equal(sync(dir).status, 0);
+  assert.ok(existsSync(join(dir, '.claude', 'skills', 'under-two', 'SKILL.md')));
+});
+
+test('a pointer name over 64 characters is a problem and that pointer alone is not made', () => {
+  const { dir, dev } = world();
+  const longest = 'x'.repeat(60); // dev- + 60 = 64, within the limit
+  const tooLong = 'y'.repeat(61); // dev- + 61 = 65
+  skill(dev, '.claude/skills', longest);
+  skill(dev, '.claude/skills', tooLong);
+  write(join(dir, 'oikos.yaml'), read(join(dir, 'oikos.yaml')).replace('only: [deploy-status]', `only: [deploy-status, ${longest}, ${tooLong}]`));
+  const run = sync(dir);
+  assert.equal(run.status, 1);
+  assert.match(run.stdout, new RegExp(`problem: oikos\\.yaml: mounts\\.projects/dev-root: skills: the pointer name 'dev-${tooLong}' is 65 characters, over the limit of 64`));
+  assert.ok(existsSync(join(dir, '.claude', 'skills', `dev-${longest}`, 'SKILL.md')), '64 characters is within the limit');
+  assert.ok(!existsSync(join(dir, '.claude', 'skills', `dev-${tooLong}`)));
+  assert.ok(existsSync(join(dir, '.claude', 'skills', 'dev-deploy-status', 'SKILL.md')), 'the other skills of the mount are made');
 });
 
 test('a pointer name that an oikos pointer or another mount already has is a problem and is not written over it', () => {

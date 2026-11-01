@@ -30,6 +30,10 @@
 // dot-named ones (common/local-stores.mjs, ADR 0002): the browser profile only while this
 // installation's Chrome is stopped.
 // `--check` changes nothing and exits 1 on any problem or drift.
+// A mount that has disappeared from the configuration keeps its wiring — ignore lines, rule exclusions,
+// pointers, the recorded root — and sync says so with a `note:`; `--prune` takes it away, and is a
+// guarded write (tools/hooks/writes.mjs): the same command with `--dry-run` first, which lists what
+// would change and writes nothing (it exits 1 only on a problem, as `--check` also does on drift).
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -40,14 +44,22 @@ import { taskTrackingConflicts } from '../common/transitions.mjs';
 import { loadLandscape } from '../common/landscape.mjs';
 import { config } from '../common/config.mjs';
 import { moveLocalStores } from '../common/local-stores.mjs';
+import { outgoingRules } from '../common/outgoing.mjs';
 import { PEOPLE_IGNORE_COMMENT, PEOPLE_IGNORE_LINE } from '../common/people.mjs';
 import { chromeRunning } from '../browser/cli.mjs';
 import { WRITES } from '../hooks/writes.mjs';
-import { wireMounts } from './mounts.mjs';
+import { goneRoots, wireMounts } from './mounts.mjs';
 import { MARKER, isOurs, pointer, mountPointers } from './pointers.mjs';
 import { HOSTS, hostNames, settingsFile, hooksFor, guardsIn, mergeHooks } from '../hooks/wiring.mjs';
 
-const check = process.argv.includes('--check');
+// Options are read only before `--`, as the write guard reads them: otherwise `sync -- --prune` would
+// prune with no dry run the guard could see.
+const argsEnd = process.argv.indexOf('--', 2);
+const flags = argsEnd < 0 ? process.argv.slice(2) : process.argv.slice(2, argsEnd);
+const check = flags.includes('--check');
+const dryRun = flags.includes('--dry-run');
+const prune = flags.includes('--prune');
+const readOnly = check || dryRun; // nothing is written
 const { resources, skills, agents, problems } = loadLandscape();
 const changed = [];
 const INSTALL = installRoot();
@@ -58,7 +70,7 @@ const CORE_REAL = realpathSync(CORE_ROOT);
 function write(path, content, label) {
   if (existsSync(path) && readFileSync(path, 'utf8') === content) return;
   changed.push(label);
-  if (!check) {
+  if (!readOnly) {
     mkdirSync(join(path, '..'), { recursive: true });
     writeFileSync(path, content);
   }
@@ -68,7 +80,7 @@ function write(path, content, label) {
 function apply({ path, content, label }) {
   if (content !== null) return write(path, content, label);
   changed.push(label);
-  if (!check) rmSync(path, { force: true });
+  if (!readOnly) rmSync(path, { force: true });
 }
 
 function readJson(path, label) {
@@ -110,6 +122,10 @@ Standing agent: [../../../${BASE}agents/${fm.name}/README.md](../../../${BASE}ag
 Start this agent: read its charter and follow it — its mission, the skills it uses, what it owns and what it never does. Do not duplicate its contents here.
 `;
 
+// What an earlier sync wrote besides the files: the MCP servers' names and the mounts' wiring.
+const statePath = INSTALL ? join(INSTALL, '.local', 'sync.json') : null;
+const state = (INSTALL && readJson(statePath, '.local/sync.json')) || {};
+
 const oikosPointers = INSTALL
   ? [...skills.map((s) => ({ name: s.dir, text: () => pointer({ ...s, name: s.dir }, `../../../${BASE}skills/${s.dir}/SKILL.md`) })),
     ...agents.filter((a) => a.enabled).map((a) => ({ name: a.dir, text: () => agentPointer({ ...a, name: a.dir }) }))]
@@ -120,6 +136,8 @@ const mountPlan = INSTALL ? mountPointers(INSTALL, config().mounts, oikosPointer
 problems.push(...mountPlan.problems);
 const wanted = [...oikosPointers, ...mountPlan.pointers];
 const names = wanted.map((w) => w.name);
+// The pointers of a mount that has gone stay until --prune (tools/sync/mounts.mjs): they are not stale.
+const heldPointers = INSTALL && !prune ? goneRoots(config().mounts, state.mounts).flatMap((root) => state.mounts[root]?.pointers ?? []) : [];
 for (const host of hostNames) {
   const wired = join(TARGET, HOSTS[host].dir, 'skills');
   for (const w of wanted) {
@@ -132,9 +150,9 @@ for (const host of hostNames) {
   }
   if (!existsSync(wired)) continue;
   for (const d of readdirSync(wired, { withFileTypes: true })) {
-    if (d.isDirectory() && !names.includes(d.name) && isOurs(join(wired, d.name, 'SKILL.md'))) {
+    if (d.isDirectory() && !names.includes(d.name) && !heldPointers.includes(d.name) && isOurs(join(wired, d.name, 'SKILL.md'))) {
       changed.push(`${HOSTS[host].dir}/skills/${d.name} (${INSTALL ? 'stale' : 'not wired in the core repository'})`);
-      if (!check) rmSync(join(wired, d.name), { recursive: true });
+      if (!readOnly) rmSync(join(wired, d.name), { recursive: true });
     }
   }
 }
@@ -196,6 +214,15 @@ if (INSTALL) {
     }
   }
 
+  // -- the content check's rules ------------------------------------------------------------
+  // .local/outgoing.yaml is read by the write tools at the command; a file that cannot be used, or an
+  // `allow:` entry that is ignored (too short), is reported here too, where the person looks.
+  try {
+    problems.push(...outgoingRules(INSTALL).problems);
+  } catch (e) {
+    problems.push(e.message);
+  }
+
   // -- MCP servers ------------------------------------------------------------------------
   // Every host reads .mcp.json — Qwen Code only once its servers are approved for this folder
   // (`qwen mcp approve --all`, again after an entry here changes; BOOTSTRAP.md). oikos brings the browser's DevTools server; the installation adds
@@ -206,8 +233,6 @@ if (INSTALL) {
     'chrome-devtools': { type: 'stdio', command: 'node', args: [join(CORE_REAL, 'tools', 'browser', 'mcp.mjs')], env: { OIKOS_HOME: INSTALL } },
   };
   const servers = { ...CORE_MCP, ...config().mcp_servers };
-  const statePath = join(INSTALL, '.local', 'sync.json');
-  const state = readJson(statePath, '.local/sync.json') || {};
   const mcpPath = join(INSTALL, '.mcp.json');
   const mcp = readJson(mcpPath, '.mcp.json');
   if (mcp) {
@@ -218,9 +243,12 @@ if (INSTALL) {
   // -- mounts -----------------------------------------------------------------------------
   // tools/sync/mounts.mjs computes the wiring of the declared mounts (docs/design/mounts.md) as file
   // edits; what it wrote is recorded in the same .local/sync.json, beside the MCP names.
-  const wiredMounts = wireMounts(INSTALL, config().mounts, state.mounts, mountPlan.pointers);
+  const wiredMounts = wireMounts(INSTALL, config().mounts, state.mounts, mountPlan.pointers, { prune });
   problems.push(...wiredMounts.problems);
   for (const edit of wiredMounts.edits) apply(edit);
+  for (const { root, wiring } of wiredMounts.pending) {
+    console.log(`note: the mount ${root} is no longer configured; its wiring is kept (${wiring}) — \`node oikos/tools/sync/cli.mjs --prune --dry-run\` shows what taking it away would change`);
+  }
   const recordMounts = Object.keys(wiredMounts.record).length > 0 || state.mounts !== undefined;
   if (mcp || recordMounts) {
     write(statePath, json({ ...state, ...(mcp ? { mcp: Object.keys(servers) } : {}), ...(recordMounts ? { mounts: wiredMounts.record } : {}) }), '.local/sync.json');
@@ -229,7 +257,7 @@ if (INSTALL) {
   // -- stores of .local/ ------------------------------------------------------------------
   // A store at its old place is moved to its dot-named one, which the secret guard keeps closed
   // by name; the old names are closed too, so a store left in place is never open meanwhile.
-  for (const m of await moveLocalStores(INSTALL, { check, browserRunning: () => chromeRunning() })) {
+  for (const m of await moveLocalStores(INSTALL, { check: readOnly, browserRunning: () => chromeRunning() })) {
     const move = `${m.from} → ${m.to}`;
     if (m.state === 'moved' || m.state === 'out of date') changed.push(move);
     // A failed move is a problem: the rest of sync runs, and it exits 1 like on any other problem.
@@ -326,6 +354,6 @@ for (const [i, tool] of runCliTools.entries()) {
 for (const p of problems) console.log(`problem: ${p}`);
 // A rule that contradicts the organization's tracker policy is a warning, not a problem (ADR 0004 D02).
 for (const w of taskTrackingConflicts(config()['task-tracking'])) console.log(`warning: ${INSTALL_FILE}: ${w}`);
-for (const c of changed) console.log(`${check ? 'out of date' : 'wrote'}: ${c}`);
-console.log(`${skills.length} skill(s), ${agents.length} agent(s), ${resources.length} resource(s), ${problems.length} problem(s), ${changed.length} ${check ? 'out of date' : 'change(s)'}`);
+for (const c of changed) console.log(`${check ? 'out of date' : dryRun ? 'would write' : 'wrote'}: ${c}`);
+console.log(`${skills.length} skill(s), ${agents.length} agent(s), ${resources.length} resource(s), ${problems.length} problem(s), ${changed.length} ${check ? 'out of date' : dryRun ? 'to change (dry run: nothing written)' : 'change(s)'}`);
 process.exit(problems.length || (check && changed.length) ? 1 : 0);

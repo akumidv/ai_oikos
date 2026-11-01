@@ -44,7 +44,7 @@
         ]
       },
       {
-        "matcher": "^(read_file|grep_search|glob|list_directory|edit|write_file|notebook_edit)$",
+        "matcher": "^(read_file|grep_search|glob|list_directory|zoom_image|lsp|edit|write_file|notebook_edit)$",
         "hooks": [
           {
             "type": "command",

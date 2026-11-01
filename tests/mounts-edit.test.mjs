@@ -1,6 +1,6 @@
 // Mounts, the declaration (ADR 0007): the files that declare the mounts are closed to file tools
 // (D-A9-SELF-UNLOCK), the package guard keeps a recorded mount closed and does not throw open on an
-// unreadable configuration, a local entry only narrows a shared one (D-A9-LOCAL-NARROW), `skills.commit`
+// unreadable configuration, a local entry only narrows a shared one (D-A9-LOCAL-NARROW), `skills.tracked`
 // lets a personal pointer be committed (D-A9-PERSONAL-POINTERS), and `setup mount add|remove` changes
 // either layer without touching the rest of the file. Each test makes a temporary installation (ACME
 // Corp) as tests/helpers/mounts.mjs does. Nothing here reaches the network.
@@ -34,6 +34,92 @@ test('the package guard keeps file tools from changing .local/mounts.yaml at all
   assert.equal(guard(dir, 'Write', { file_path: join(dir, '.local', 'catalog.yaml'), content: 'x' }), undefined, 'the rest of .local/ is not this guard\'s');
 });
 
+test('the package guard keeps file tools from changing .local/outgoing.yaml and .local/sync.json at all (D-A9-GUARD-FILES)', () => {
+  const { dir } = mounted();
+  assert.equal(sync(dir).status, 0);
+  write(join(dir, '.local', 'outgoing.yaml'), 'terms: [Globex]\nallow: ["a phrase that is let through"]\n');
+  for (const file of ['outgoing.yaml', 'sync.json']) {
+    const path = join(dir, '.local', file);
+    for (const [name, input] of [
+      ['Edit', { file_path: path, old_string: text(path).slice(0, 5), new_string: 'x' }],
+      ['Write', { file_path: path, content: text(path) }],
+      ['MultiEdit', { file_path: path, edits: [{ old_string: text(path).slice(0, 5), new_string: 'x' }] }],
+      ['NotebookEdit', { notebook_path: path }],
+      ['Write', { file_path: `.local/${file}`, content: '' }],
+    ]) {
+      const answer = guard(dir, name, input);
+      assert.ok(isDenied(answer), `${file}: ${name}`);
+      assert.match(answer.permissionDecisionReason, new RegExp(`\\.local/${file.replace('.', '\\.')} .*not changed by a file tool.*in their own editor`));
+    }
+  }
+  assert.equal(guard(dir, 'Write', { file_path: join(dir, '.local', 'catalog.yaml'), content: 'x' }), undefined, 'the rest of .local/ is not this guard\'s');
+});
+
+test('the package guard keeps the hooks, disableAllHooks and claudeMdExcludes of the settings files, and lets the other keys be edited (D-A9-GUARD-FILES)', () => {
+  const { dir } = mounted();
+  assert.equal(sync(dir).status, 0);
+  for (const file of ['settings.json', 'settings.local.json']) {
+    const path = join(dir, '.claude', file);
+    const settings = readJson(path);
+    // The two files each hold something: the shared one the hooks, the local one the mounts' exclusions; give both every key.
+    write(path, `${JSON.stringify({ ...settings, hooks: settings.hooks ?? { Stop: [{ hooks: [{ type: 'command', command: 'echo done' }] }] }, claudeMdExcludes: settings.claudeMdExcludes ?? ['/x/CLAUDE.md'], disableAllHooks: false, model: 'a', permissions: { allow: ['Read'] } }, null, 2)}\n`);
+    const before = text(path);
+    const edit = (old_string, new_string) => ({ file_path: path, old_string, new_string });
+
+    // other keys, or the same keys written again: let through
+    assert.equal(guard(dir, 'Edit', edit('"model": "a"', '"model": "b"')), undefined, `${file}: another key`);
+    assert.equal(guard(dir, 'Edit', edit('"Read"', '"Read", "Grep"')), undefined, `${file}: permissions`);
+    assert.equal(guard(dir, 'Write', { file_path: path, content: before }), undefined, `${file}: the same content`);
+    assert.equal(guard(dir, 'Write', { file_path: path, content: JSON.stringify(JSON.parse(before)) }), undefined, `${file}: the same parsed parts, another layout`);
+    assert.equal(guard(dir, 'Edit', edit('no such text', 'x')), undefined, `${file}: an edit that cannot apply`);
+    assert.equal(guard(dir, 'MultiEdit', { file_path: path, edits: [edit('"model": "a"', '"model": "c"'), edit('"Read"', '"Edit"')] }), undefined);
+
+    // a change to any of the three keys, however it is made: denied
+    const parsed = JSON.parse(before);
+    const without = (key) => { const copy = { ...parsed }; delete copy[key]; return JSON.stringify(copy); };
+    for (const [name, input] of [
+      ['Edit', edit('"disableAllHooks": false', '"disableAllHooks": true')],
+      ['Edit', edit('"claudeMdExcludes": [', '"claudeMdExcludes": [\n    "/y/CLAUDE.md",')],
+      ['Edit', edit('"hooks": {', '"hooks": {\n    "Notification": [],')],
+      ['MultiEdit', { file_path: path, edits: [edit('"model": "a"', '"model": "b"'), edit('"disableAllHooks": false', '"disableAllHooks": true')] }],
+      ['Write', { file_path: path, content: without('hooks') }],
+      ['Write', { file_path: path, content: without('claudeMdExcludes') }],
+      ['Write', { file_path: path, content: without('disableAllHooks') }],
+      ['Write', { file_path: path, content: '{ not json' }],
+      ['Write', { file_path: path, content: '[]' }],
+      ['Edit', { file_path: path }],
+      ['NotebookEdit', { notebook_path: path }],
+    ]) {
+      const answer = guard(dir, name, input);
+      assert.ok(isDenied(answer), `${file}: ${name} ${JSON.stringify({ ...input, file_path: undefined })}`);
+      assert.match(answer.permissionDecisionReason, /`hooks`, `disableAllHooks`, `claudeMdExcludes` keys of \.claude\/settings(\.local)?\.json .*in their own editor/);
+    }
+    assert.equal(text(path), before, 'a guard decision writes nothing');
+  }
+  // every host's settings files are kept the same way, whether or not sync has made them yet
+  for (const file of ['.qwen/settings.json', '.qwen/settings.local.json']) {
+    const path = join(dir, file);
+    if (!existsSync(path)) write(path, '{}\n');
+    const answer = guard(dir, 'Write', { file_path: path, content: '{ "disableAllHooks": true }\n' });
+    assert.ok(isDenied(answer), file);
+    assert.match(answer.permissionDecisionReason, new RegExp(`keys of ${file.replace(/\./g, '\\.')} `));
+    assert.equal(guard(dir, 'Write', { file_path: path, content: `${JSON.stringify({ ...JSON.parse(text(path)), model: 'b' })}\n` }), undefined, `${file}: another key`);
+  }
+});
+
+test('sync, a tool and not a file tool, still writes the settings files the guard protects', () => {
+  const { dir, team } = mounted();
+  assert.equal(sync(dir).status, 0);
+  const local = join(dir, '.claude', 'settings.local.json');
+  const shared = join(dir, '.claude', 'settings.json');
+  assert.ok(readJson(local).claudeMdExcludes.some((entry) => entry.startsWith(team)), 'the exclusions are written');
+  assert.ok(readJson(shared).hooks, 'the hooks are written');
+  write(shared, text(shared).replace('"hooks"', '"hooks_x"'));
+  const again = sync(dir);
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.ok(readJson(shared).hooks, 'sync puts the generated hooks back');
+});
+
 test('the package guard lets oikos.yaml be edited except for its mounts: part', () => {
   const { dir } = mounted();
   const yaml = join(dir, 'oikos.yaml');
@@ -62,7 +148,7 @@ test('the package guard lets oikos.yaml be edited except for its mounts: part', 
   }
 });
 
-test('the package guard keeps a mount closed until sync forgets it, and when the configuration cannot be read', () => {
+test('the package guard keeps a mount closed until sync --prune forgets it, and when the configuration cannot be read', () => {
   const { dir, team, own } = mounted();
   assert.equal(sync(dir).status, 0);
   const note = (root) => guard(dir, 'Write', { file_path: join(root, 'note.md'), content: 'x' });
@@ -79,7 +165,10 @@ test('the package guard keeps a mount closed until sync forgets it, and when the
   assert.ok(isDenied(note(own)));
   assert.match(note(team).permissionDecisionReason, /inside the mount/);
   assert.equal(sync(dir).status, 0);
-  assert.equal(note(team), undefined, 'sync has removed the record');
+  assert.ok(isDenied(note(team)), 'plain sync keeps the wiring and the record: still closed');
+  assert.ok(isDenied(note(own)));
+  assert.equal(sync(dir, '--prune').status, 0);
+  assert.equal(note(team), undefined, 'sync --prune has removed the record');
   assert.equal(note(own), undefined);
 
   // both files malformed: no mount is configured, the recorded roots hold
@@ -126,34 +215,42 @@ test('a local entry replaces a shared one whole but may only narrow it', () => {
   assert.deepEqual([openMount.layer, openMount.use, openMount.mention_assistant], ['local', ['wiki'], 'allow'], 'what the shared entry allows, the local one may keep');
 });
 
-test('skills.commit is for a personal entry of an inside mount only', () => {
+test('skills.tracked is for a personal entry of an inside mount only', () => {
   const { dir, own } = mounted();
-  write(join(dir, 'oikos.yaml'), text(join(dir, 'oikos.yaml')).replace('prefix: dev,', 'prefix: dev, commit: true,'));
+  write(join(dir, 'oikos.yaml'), text(join(dir, 'oikos.yaml')).replace('prefix: dev,', 'prefix: dev, tracked: true,'));
   skill(own, '.claude/skills', 'outside-skill');
-  write(join(dir, '.local', 'mounts.yaml'), `mounts:\n  ${own}:\n    use: [skills]\n    skills: { commit: true }\n  vaults/team:\n    use: [skills]\n    skills: { commit: yes }\n`);
+  write(join(dir, '.local', 'mounts.yaml'), `mounts:\n  ${own}:\n    use: [skills]\n    skills: { tracked: true }\n  vaults/team:\n    use: [skills]\n    skills: { tracked: yes }\n`);
   skill(join(dir, 'vaults', 'team'), '.claude/skills', 'note-skill');
   const config = configOf(dir);
   assert.deepEqual(config.problems, [
-    'oikos.yaml: mounts.projects/dev-root: skills.commit: only in .local/mounts.yaml — a shared entry cannot decide what its readers commit',
-    `.local/mounts.yaml: mounts.${own}: skills.commit: a pointer to a mount outside the installation holds an absolute path, so it is never committed`,
-    '.local/mounts.yaml: mounts.vaults/team: skills.commit: must be true or false',
+    'oikos.yaml: mounts.projects/dev-root: skills.tracked: only in .local/mounts.yaml — a shared entry cannot decide what its readers commit',
+    `.local/mounts.yaml: mounts.${own}: skills.tracked: a pointer to a mount outside the installation holds an absolute path, so it is never committed`,
+    '.local/mounts.yaml: mounts.vaults/team: skills.tracked: must be true or false',
   ]);
-  assert.deepEqual(config.mounts.map((m) => m.skills?.commit), [false, false, false], 'ignored in every case');
+  assert.deepEqual(config.mounts.map((m) => m.skills?.tracked), [false, false, false], 'ignored in every case');
 
-  write(join(dir, 'oikos.yaml'), text(join(dir, 'oikos.yaml')).replace(' commit: true,', ''));
-  write(join(dir, '.local', 'mounts.yaml'), 'mounts:\n  projects/dev-root:\n    use: [skills]\n    skills: { prefix: dev, only: [deploy-status], commit: true }\n');
+  write(join(dir, 'oikos.yaml'), text(join(dir, 'oikos.yaml')).replace(' tracked: true,', ''));
+  write(join(dir, '.local', 'mounts.yaml'), 'mounts:\n  projects/dev-root:\n    use: [skills]\n    skills: { prefix: dev, only: [deploy-status], tracked: true }\n');
   const allowed = configOf(dir);
   assert.deepEqual(allowed.problems, [], 'the same key in a personal entry of an inside mount');
-  assert.equal(allowed.mounts.find((m) => m.path === 'projects/dev-root').skills.commit, true);
+  assert.equal(allowed.mounts.find((m) => m.path === 'projects/dev-root').skills.tracked, true);
 });
 
-test('sync keeps a personal pointer out of the installation\'s commits unless skills.commit says to commit it', () => {
+test('the old key skills.commit is an unknown key: reported, and it does not track the pointers', () => {
+  const { dir } = mounted();
+  write(join(dir, '.local', 'mounts.yaml'), 'mounts:\n  projects/dev-root:\n    use: [skills]\n    skills: { prefix: dev, only: [deploy-status], commit: true }\n');
+  const config = configOf(dir);
+  assert.deepEqual(config.problems, ['.local/mounts.yaml: mounts.projects/dev-root: skills.commit: unknown key (from, prefix, only, tracked)']);
+  assert.equal(config.mounts.find((m) => m.path === 'projects/dev-root').skills.tracked, false);
+});
+
+test('sync keeps a personal pointer out of the installation\'s commits unless skills.tracked says to track it', () => {
   const { dir, dev } = mounted();
   repository(dir);
   const pointer = '.claude/skills/dev-deploy-status/SKILL.md';
   const exclude = join(dir, '.git', 'info', 'exclude');
   const excluded = () => (existsSync(exclude) ? text(exclude) : '');
-  const entry = (commit) => `mounts:\n  projects/dev-root:\n    use: [skills]\n    skills: { prefix: dev, only: [deploy-status]${commit ? ', commit: true' : ''} }\n`;
+  const entry = (tracked) => `mounts:\n  projects/dev-root:\n    use: [skills]\n    skills: { prefix: dev, only: [deploy-status]${tracked ? ', tracked: true' : ''} }\n`;
   const record = () => readJson(join(dir, '.local', 'sync.json')).mounts[dev];
 
   write(join(dir, '.local', 'mounts.yaml'), entry(false));
@@ -207,18 +304,18 @@ test('setup mount add --personal changes .local/mounts.yaml: a dry run shows the
   assert.match(second.output, /mounts\.vaults\/extra is declared already — remove it first/);
 });
 
-test('setup mount add creates .local/mounts.yaml, and --commit-pointers sets skills.commit', () => {
+test('setup mount add creates .local/mounts.yaml, and --tracked-pointers sets skills.tracked', () => {
   const { dir } = mounted();
   const local = join(dir, '.local', 'mounts.yaml');
   rmSync(local);
   const dev3 = repository(join(dir, 'projects', 'dev3'));
   skill(dev3, '.claude/skills', 'lint');
-  const run = setup(dir, 'add', 'projects/dev3/', '--personal', '--use', 'skills', '--prefix', 'd3', '--skills-only', 'lint', '--commit-pointers');
+  const run = setup(dir, 'add', 'projects/dev3/', '--personal', '--use', 'skills', '--prefix', 'd3', '--skills-only', 'lint', '--tracked-pointers');
   assert.equal(run.status, 0, run.output);
   assert.ok(text(local).startsWith('mounts:\n'));
   const config = configOf(dir);
   assert.deepEqual(config.problems, []);
-  assert.deepEqual(config.mounts.find((m) => m.path === 'projects/dev3').skills, { from: '.claude/skills', prefix: 'd3', only: ['lint'], commit: true }, 'the trailing / is not kept');
+  assert.deepEqual(config.mounts.find((m) => m.path === 'projects/dev3').skills, { from: '.claude/skills', prefix: 'd3', only: ['lint'], tracked: true }, 'the trailing / is not kept');
 });
 
 test('setup mount add --shared changes the mounts: part of oikos.yaml and writes no absolute path', () => {
@@ -250,7 +347,9 @@ test('setup mount remove takes one entry out and leaves the rest of the file', (
   assert.match(dry.stdout, /^- {2}vaults\/team:$/m);
   assert.equal(text(yaml), before, 'a dry run writes nothing');
 
-  assert.equal(setup(dir, 'remove', team, '--shared').status, 0, 'by the absolute path of its root');
+  const removed = setup(dir, 'remove', team, '--shared');
+  assert.equal(removed.status, 0, 'by the absolute path of its root');
+  assert.match(removed.stdout, /sync\/cli\.mjs --prune --dry-run` shows what taking it away would change/, 'the wiring stays until sync --prune');
   assert.ok(!text(yaml).includes('vaults/team'));
   assert.ok(text(yaml).includes('  projects/dev-root:\n    use: [skills]\n'), 'the next entry stays whole');
   assert.ok(text(yaml).startsWith(before.split('mounts:')[0]));
@@ -274,7 +373,7 @@ test('setup mount refuses what would be wrong, and writes nothing', () => {
   for (const [args, expected] of [
     [['add', 'vaults/nowhere', '--shared', '--use', 'wiki'], /nothing written.*mounts\.vaults\/nowhere: .*does not exist/s],
     [['add', outside, '--shared', '--use', 'wiki'], /a shared mount path is relative to the installation/],
-    [['add', 'vaults/extra', '--shared', '--use', 'skills', '--commit-pointers'], /skills\.commit: only in \.local\/mounts\.yaml/],
+    [['add', 'vaults/extra', '--shared', '--use', 'skills', '--tracked-pointers'], /skills\.tracked: only in \.local\/mounts\.yaml/],
     [['add', dev, '--personal', '--use', 'skills,wiki'], /may not widen the shared mount projects\/dev-root/],
     [['add', 'vaults/team', '--shared', '--use', 'wiki'], /mounts\.vaults\/team is declared already/],
     [['add', 'vaults/extra', '--personal', '--wiki-name', 'x'], /--wiki-name belongs to a mount used as a wiki/],

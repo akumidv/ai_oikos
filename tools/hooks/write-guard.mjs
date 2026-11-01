@@ -292,8 +292,21 @@ function options(call) {
 }
 
 const isHelp = (call) => call.verb === undefined || call.verb === '-h' || options(call).includes('--help');
-const isWriteCall = (call, writes) => writes[call.tool].includes(call.verb) && !isHelp(call);
-const isReadCall = (call, writes) => isHelp(call) || (COMMAND_WORD.test(call.verb) && !writes[call.tool].includes(call.verb));
+
+/**
+ * The entry of the tool's write list that makes `call` a write, or null. An entry is a command word —
+ * the call's first argument, and not a help request — or, for a tool with no commands (`sync`), an
+ * `--option` of the call: that one counts wherever it stands before `--`, and `--help` does not
+ * excuse it, since such a tool takes `--help` for nothing.
+ */
+function writeWord(call, writes) {
+  const option = writes[call.tool].find((word) => word.startsWith('--') && options(call).includes(word));
+  if (option) return option;
+  return isHelp(call) ? null : (writes[call.tool].find((word) => word === call.verb) ?? null);
+}
+
+const isWriteCall = (call, writes) => writeWord(call, writes) !== null;
+const isReadCall = (call, writes) => !isWriteCall(call, writes) && (isHelp(call) || (COMMAND_WORD.test(call.verb) && !writes[call.tool].includes(call.verb)));
 
 /** Whether a call is a dry run: `--dry-run` as a token before `--`. */
 export const isDryRun = (call) => options(call).includes('--dry-run');
@@ -886,7 +899,7 @@ function check(command, cwd, sid, hosts) {
   }
   if (result.verdict === 'denied') return deny(strictForm(result.tools));
   const { call } = result;
-  const label = `${call.tool} ${call.verb}`;
+  const label = `${call.tool} ${writeWord(call, WRITES) ?? call.verb}`;
   const state = validState(readState(sid, 'writes', null));
   const sig = signature(call, cwd);
   if (isDryRun(call)) {

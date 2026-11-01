@@ -11,8 +11,10 @@
 // The names below are read from the shipped bundles, not guessed. They matter twice: here, and
 // in the `matcher` of each host's settings (tools/hooks/wiring.mjs), where a matcher written in
 // the other host's names matches nothing and the guard is silently inert.
+import { homedir } from 'node:os';
 import { basename, normalize, resolve } from 'node:path';
-import { LOCAL_STORES } from '../common/paths.mjs';
+import { fileURLToPath } from 'node:url';
+import { LOCAL_STORES, realForms } from '../common/paths.mjs';
 
 /** Anything that runs a shell command. */
 export const SHELL_TOOLS = new Set(['Bash', 'run_shell_command']);
@@ -20,8 +22,10 @@ export const SHELL_TOOLS = new Set(['Bash', 'run_shell_command']);
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'edit', 'write_file', 'notebook_edit']);
 /** Tools whose `pattern` is a file glob; for the others (`grep_search`, `Grep`) it is a regex over contents. */
 export const GLOB_TOOLS = new Set(['Glob', 'glob']);
-/** Anything that reads a path or searches within one. */
-export const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'read_file', 'grep_search', 'glob', 'list_directory']);
+/** Anything that reads a path or searches within one (`zoom_image` reads an image, `lsp` a source file). */
+export const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'read_file', 'grep_search', 'glob', 'list_directory', 'zoom_image', 'lsp']);
+/** The search tools: a scope folder (`path`, else the session's folder) is searched below. */
+export const SEARCH_TOOLS = new Set(['Grep', 'Glob', 'grep_search', 'glob']);
 export function toolName(payload) {
   return typeof payload.tool_name === 'string' ? payload.tool_name : '';
 }
@@ -31,6 +35,7 @@ const has = (set, payload) => set.has(toolName(payload));
 export const isShell = (payload) => has(SHELL_TOOLS, payload);
 export const isEdit = (payload) => has(EDIT_TOOLS, payload);
 export const isRead = (payload) => has(READ_TOOLS, payload);
+export const isSearch = (payload) => has(SEARCH_TOOLS, payload);
 /** A call that names a file: reads, writes, and the search tools that take a scope directory. */
 export const isFileTool = (payload) => isEdit(payload) || isRead(payload);
 
@@ -41,24 +46,143 @@ export function shellCommand(payload) {
   return typeof command === 'string' ? command : null;
 }
 
+/** Qwen's `unescapePath`: a backslash before a shell-special character is dropped (`a\ b` is `a b`). */
+const UNESCAPE = /\\([ \t()[\]{};|*?$`'"#&<>!~,])/g;
+
+/** `~` and `~/…` as the home folder of the hook's own user; anything else as written. */
+const homed = (path) => (/^~(?=\/|$)/.test(path) ? homedir() + path.slice(1) : path);
+
 /**
- * The paths a call touches, de-duplicated and in the order the host named them.
+ * Whether `path` starts with `~` and a name, another user's home (`~root/x`): no host's expansion of it
+ * can be told from here, so a guard does not judge such a path and denies it.
+ */
+export const isUserHome = (path) => typeof path === 'string' && /^~[^/]/.test(path.trim());
+
+/**
+ * The spellings of one path a file tool names that the call may reach, the likeliest first: the path
+ * trimmed, with `~` and `~/` expanded to the home folder (the hosts do that before they open it); that
+ * with Qwen's escapes undone (it opens `unescapePath(path.trim())`); and the path as written, for a host
+ * that does neither. A `file://` URI (the `lsp` tool takes one) is its path. A guard judges every spelling,
+ * so a leading space, a `~` or an escape does not turn a path it would deny into one it does not see.
+ * @param {unknown} value
+ * @returns {string[]}
+ */
+export function pathForms(value) {
+  if (typeof value !== 'string') return [];
+  const trimmed = value.trim();
+  const forms = [];
+  for (const text of [trimmed, trimmed.replace(UNESCAPE, '$1'), value]) {
+    let path = text;
+    if (/^file:\/\//i.test(path)) {
+      try {
+        path = fileURLToPath(path);
+      } catch { /* not a file URI the system can read: judged as written */ }
+    }
+    path = homed(path);
+    if (path && !forms.includes(path)) forms.push(path);
+  }
+  return forms;
+}
+
+/**
+ * The paths a call touches, de-duplicated and in the order the host named them, each in every spelling
+ * {@link pathForms} gives.
  *
- * Three keys, because the spelling of the target differs per tool family: `file_path` for the
+ * The keys, because the spelling of the target differs per tool family: `file_path` for the
  * single-file tools, `notebook_path` for the notebook editor, `path` as the *scope* of a search
- * or listing. Claude's `MultiEdit` names them per edit instead of once for the call.
+ * or listing, `filePath` for Qwen's `lsp` (and the `uri` of its call-hierarchy item). Claude's
+ * `MultiEdit` names them per edit instead of once for the call.
  */
 export function fileTargets(payload) {
   const input = payload.tool_input || {};
   const found = [];
   const add = (value) => {
-    if (typeof value === 'string' && value && !found.includes(value)) found.push(value);
+    for (const path of pathForms(value)) if (!found.includes(path)) found.push(path);
   };
   add(input.file_path);
   add(input.notebook_path);
   add(input.path);
+  add(input.filePath);
+  add(input.callHierarchyItem?.uri);
   if (Array.isArray(input.edits)) for (const edit of input.edits) add(edit?.file_path);
   return found;
+}
+
+/**
+ * The path of a call, or the pattern of a glob call, that starts with another user's home (`~name`) — a
+ * path the guards cannot judge ({@link isUserHome}) — or undefined.
+ * @returns {string|undefined}
+ */
+export function unjudgeablePath(payload) {
+  const input = payload.tool_input || {};
+  const named = [input.file_path, input.notebook_path, input.path, input.filePath, input.callHierarchyItem?.uri];
+  if (Array.isArray(input.edits)) named.push(...input.edits.map((edit) => edit?.file_path));
+  if (has(GLOB_TOOLS, payload)) named.push(input.pattern);
+  return named.find(isUserHome);
+}
+
+/**
+ * The folders a search call looks below: its `path` (the session's folder `cwd` when it names none),
+ * and, for a glob tool, the folder before the first wildcard of its pattern: that of an absolute or `~`
+ * pattern, which the tool searches whatever `path` says, and that of a relative one, which it searches
+ * below `path` (`../other/*.md`, or a link of the folder). Each as `{ named, real }`: the folder as the
+ * call names it (in every spelling, {@link pathForms}), and its real path, resolved component by
+ * component (ADR 0007 D02) — twice where a `..` after a link reads differently ({@link realForms}).
+ * @returns {{named: string, real: string}[]}
+ */
+export function searchScopes(payload, cwd) {
+  const input = payload.tool_input || {};
+  const base = resolve(cwd || process.cwd());
+  const scopes = pathForms(input.path);
+  if (!scopes.length) scopes.push(base);
+  const named = [...scopes];
+  if (has(GLOB_TOOLS, payload)) {
+    for (const pattern of pathForms(input.pattern).flatMap((text) => braceAlternatives(text))) {
+      const prefix = globPrefix(pattern);
+      if (prefix.startsWith('/')) named.push(prefix);
+      else if (prefix) named.push(...scopes.map((scope) => `${scope}/${prefix}`));
+    }
+  }
+  return named.flatMap((scope) => realForms(scope, base).map((real) => ({ named: scope, real })));
+}
+
+const MAX_ALTERNATIVES = 64;
+const BRACE_DEPTH = { '{': 1, '}': -1 };
+
+/** The first complete brace group of `pattern`: where it opens and closes, and the commas of its top level (the opening brace counts as the first cut); null when there is none. */
+function braceGroup(pattern) {
+  const open = pattern.indexOf('{');
+  if (open < 0) return null;
+  let depth = 0;
+  const cuts = [open];
+  for (let i = open; i < pattern.length; i++) {
+    depth += BRACE_DEPTH[pattern[i]] ?? 0;
+    if (pattern[i] === ',' && depth === 1) cuts.push(i);
+    if (depth === 0) return { open, close: i, cuts };
+  }
+  return null;
+}
+
+/**
+ * The patterns a glob with braces stands for (`{../other,x}/*.md` is `../other/*.md` and `x/*.md`), the
+ * first brace group expanded and then the rest of each, at most MAX_ALTERNATIVES of them; a pattern
+ * without a complete group is its own only alternative. A brace group at the start would otherwise
+ * hide the folder a glob searches.
+ */
+function braceAlternatives(pattern) {
+  const group = braceGroup(pattern);
+  if (!group) return [pattern];
+  const ends = [...group.cuts.slice(1), group.close];
+  return group.cuts
+    .flatMap((from, n) => braceAlternatives(`${pattern.slice(0, group.open)}${pattern.slice(from + 1, ends[n])}${pattern.slice(group.close + 1)}`))
+    .slice(0, MAX_ALTERNATIVES);
+}
+
+/** The folder before the first wildcard of a glob (the whole pattern when it has none); an absolute pattern with none before the wildcard gives `/`. */
+function globPrefix(pattern) {
+  const cut = pattern.search(/[*?[{]/);
+  const prefix = cut < 0 ? pattern : pattern.slice(0, pattern.lastIndexOf('/', cut) + 1);
+  return pattern.startsWith('/') ? prefix || '/' : prefix;
 }
 
 /**

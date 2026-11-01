@@ -20,8 +20,10 @@
 //
 // Sync replaces only what it wrote. Every entry it adds is recorded per mount root in
 // `.local/sync.json` (the `mounts` key, the shape of the `Wired` record below), so an entry it finds
-// already there stays the person's, and a mount removed from the configuration loses exactly the
-// entries recorded for it. Absolute paths appear only in git-ignored local files.
+// already there stays the person's. A mount that disappears from the configuration (or whose
+// repository is not there) keeps its wiring — entries, pointers and record — and sync only says so
+// (`pending`); the wiring goes, exactly the entries recorded for it, only when sync is asked to
+// `prune` (D-A9-GUARD-FILES d). Absolute paths appear only in git-ignored local files.
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, relative, sep } from 'node:path';
@@ -146,6 +148,32 @@ function ignoreFiles(root, files, label, owned) {
 const pick = (record, key) => (record[key] ?? []);
 const union = (records, key) => Object.values(records).flatMap((r) => pick(r, key));
 
+const isMap = (v) => v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * The roots an earlier sync wired that no longer have a mount to wire: not configured, or not a
+ * repository top.
+ * @param {object[]} mounts the resolved mounts
+ * @param {Record<string, Wired>|undefined} recorded
+ * @returns {string[]}
+ */
+export function goneRoots(mounts, recorded) {
+  return isMap(recorded) ? Object.keys(recorded).filter((root) => !mounts.some((m) => m.root === root && isRepoTop(m.root))) : [];
+}
+
+/** What a record says sync wired for one mount, in words: `3 claudeMdExcludes entries in … ; the pointers a, b`. */
+export function describeWiring(root, record = {}) {
+  const count = (list, one, many) => (list?.length ? [`${list.length} ${list.length === 1 ? one : many}`] : []);
+  return [
+    ...count(record.installExcludes, `claudeMdExcludes entry in ${SETTINGS}`, `claudeMdExcludes entries in ${SETTINGS}`),
+    ...count(record.installDirs, `additionalDirectories entry in ${SETTINGS}`, `additionalDirectories entries in ${SETTINGS}`),
+    ...count(record.excludes, `claudeMdExcludes entry in ${root}/${SETTINGS}`, `claudeMdExcludes entries in ${root}/${SETTINGS}`),
+    ...count(record.ignored, `line in ${root}/.git/info/exclude`, `lines in ${root}/.git/info/exclude`),
+    ...count(record.installIgnored, "line in the installation's .git/info/exclude", "lines in the installation's .git/info/exclude"),
+    ...(record.pointers?.length ? [`the pointers ${record.pointers.join(', ')}`] : []),
+  ].join('; ');
+}
+
 /** Items 1 and the outside mounts' directories: the installation's own `.claude/settings.local.json`. */
 function wireInstallation(out, install, wired, recorded) {
   const path = join(install, SETTINGS);
@@ -254,6 +282,47 @@ function unwireMount(out, root, prev) {
   }
 }
 
+/** What the wiring steps write into: the file edits, the problems, the record of what was wired (`keep` adds to it, leaving out the empty fields) and `pending`. */
+function collector() {
+  const record = {};
+  return {
+    edits: [],
+    problems: [],
+    pending: [],
+    record,
+    keep(root, fields) {
+      const next = { ...record[root] };
+      for (const [key, value] of Object.entries(fields)) if (value !== undefined && value !== false && !(Array.isArray(value) && !value.length)) next[key] = value;
+      if (Object.keys(next).length) record[root] = next;
+    },
+  };
+}
+
+/**
+ * What stays of the wiring of the gone mounts `gone`: unless pruning, each is `pending` with its
+ * wiring in words, and the record the active mounts' wiring reconciles against (`owned`) lacks them —
+ * their entries are left alone and their record stays whole.
+ */
+function keptWiring(recorded, gone, prune) {
+  if (prune) return { pending: [], owned: recorded };
+  const pending = gone.map((root) => ({ root, wiring: describeWiring(root, recorded[root]) }));
+  return { pending, owned: Object.fromEntries(Object.entries(recorded).filter(([root]) => !gone.includes(root))) };
+}
+
+/** A mount that has gone: its wiring is taken away when pruning, else kept as recorded. */
+function settleGone(out, root, prev, prune) {
+  if (prune) unwireMount(out, root, prev);
+  else out.keep(root, prev);
+}
+
+/** The wiring of the mounts that are there: the installation's lists and ignore lines, each mount's pointers and, for an inside one, its own settings. */
+function wireActive(out, install, wired, pointers, { recorded, owned }) {
+  wireInstallation(out, install, wired, owned);
+  wireInstallIgnore(out, install, pointers, owned);
+  for (const m of wired) out.keep(m.root, { pointers: pointers.filter((p) => p.mount.root === m.root).map((p) => p.name) });
+  for (const m of wired) if (m.inside) wireMount(out, install, m, recorded[m.root] ?? {});
+}
+
 /**
  * The wiring of items 1-3 for `mounts` (config().mounts) in the installation `install`, against
  * what an earlier sync `recorded` (the `mounts` key of `.local/sync.json`, `{}` when none): the file
@@ -261,34 +330,23 @@ function unwireMount(out, root, prev) {
  * A mount whose root is not a repository top is not wired — config() reports it — and counts as
  * removed. `pointers` are the skill pointers sync writes for the mounts (pointers.mjs): their
  * names are recorded and the ones kept out of the installation's commits get their ignore lines.
- * Nothing is written here.
+ * What was wired for a mount that has gone is kept, and each such mount is listed in `pending` with
+ * its wiring in words, unless `prune` is set: then it is taken away. Nothing is written here.
  * @param {string} install the installation's root
  * @param {object[]} mounts the resolved mounts (tools/common/mounts.mjs)
  * @param {Record<string, Wired>} recorded
  * @param {import('./pointers.mjs').MountPointer[]} pointers
- * @returns {{edits: Edit[], record: Record<string, Wired>, problems: string[]}}
+ * @param {{prune?: boolean}} [options]
+ * @returns {{edits: Edit[], record: Record<string, Wired>, problems: string[], pending: {root: string, wiring: string}[]}}
  */
-export function wireMounts(install, mounts, recorded = {}, pointers = []) {
+export function wireMounts(install, mounts, recorded = {}, pointers = [], { prune = false } = {}) {
+  const gone = goneRoots(mounts, recorded);
+  const { pending, owned } = keptWiring(recorded, gone, prune);
   const wired = mounts.filter((m) => isRepoTop(m.root));
-  const gone = Object.keys(recorded).filter((root) => !wired.some((m) => m.root === root));
-  const record = {};
-  const out = {
-    edits: [],
-    problems: [],
-    record,
-    /** Remember `fields` for `root`, leaving out the empty ones. */
-    keep(root, fields) {
-      const next = { ...record[root] };
-      for (const [key, value] of Object.entries(fields)) if (value !== undefined && value !== false && !(Array.isArray(value) && !value.length)) next[key] = value;
-      if (Object.keys(next).length) record[root] = next;
-    },
-  };
-  if (!wired.length && !gone.length) return out;
-  const base = realpathSync(install);
-  wireInstallation(out, base, wired, recorded);
-  wireInstallIgnore(out, base, pointers, recorded);
-  for (const m of wired) out.keep(m.root, { pointers: pointers.filter((p) => p.mount.root === m.root).map((p) => p.name) });
-  for (const m of wired) if (m.inside) wireMount(out, base, m, recorded[m.root] ?? {});
-  for (const root of gone) unwireMount(out, root, recorded[root]);
-  return { edits: out.edits, record, problems: out.problems };
+  const out = collector();
+  if (wired.length || gone.length) {
+    wireActive(out, realpathSync(install), wired, pointers, { recorded, owned });
+    for (const root of gone) settleGone(out, root, recorded[root], prune);
+  }
+  return { edits: out.edits, record: out.record, problems: out.problems, pending };
 }

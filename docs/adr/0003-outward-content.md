@@ -5,6 +5,15 @@ Accepted commitments only. Design, alternatives and open points:
 [`_aitna/TASKS.md`](../../_aitna/TASKS.md) (F16). Accepted by the owner, with the
 design's open points O1–O5 decided as D03, D04 and D05 record.
 
+**Note — refinements in [ADR 0007](0007-mounts.md) (accepted).** They leave the text below
+unchanged and are commitments with ADR 0007's acceptance: a vault
+note moves from D05's unchecked routes to a checked tool (0007 D04); an `allow:` entry (D04 here)
+that is empty or shorter than 8 characters is ignored as a problem, the dry run lists each line an
+entry let pass beside the count, and `.local/outgoing.yaml` is closed to the file tools (0007 D01,
+D04); every check also takes the terms of the installation's linked installations (0007 D05). The
+`allow:` rules and the closed file are built (`tools/common/outgoing.mjs`,
+`tools/hooks/mounts-lock.mjs`).
+
 ## D01 — One common check for every guarded write that carries text
 <a id="dec-0003-d01"></a>`Decision-ID: DEC-0003/D01`
 
@@ -43,6 +52,11 @@ design's open points O1–O5 decided as D03, D04 and D05 record.
 - **Consequences.** Text in Greek is no longer caught by `language`; an installation that writes
   to Greek-speaking readers has nothing to catch, and one that must keep Greek prose out lists the
   words under `terms:` (D04).
+  The check is a net for accidents, not a barrier against an agent that hides a term on purpose:
+  look-alike letters, a term split by markup, a zero-width character or a line break. The text is
+  normalised before matching (NFKC, zero-width characters and emphasis markup removed, hyphenated
+  and line-split words joined; ADR 0007 D04), which narrows the accidents it misses, not the
+  intent.
 
 ## D03 — Dry run shows, real run refuses, the override is in both
 <a id="dec-0003-d03"></a>`Decision-ID: DEC-0003/D03`
@@ -63,6 +77,9 @@ design's open points O1–O5 decided as D03, D04 and D05 record.
   reads as "would be refused" in every harness (owner). A `secret` finding is never
   overridden by `--allow-flagged`, only by an `allow:` entry that contains the secret (owner
   decision D-ALLOW-SECRET, D04).
+  Accepted gap, task L4: the write guard binds the command's tokens, not the text, so a body
+  passed by `--file` can change between the dry run and the real run; the real run still checks
+  it, but sends text nobody saw (ADR 0007 D04).
 
 ## D04 — The installation's words live in `.local/outgoing.yaml`
 <a id="dec-0003-d04"></a>`Decision-ID: DEC-0003/D04`
@@ -88,3 +105,5 @@ design's open points O1–O5 decided as D03, D04 and D05 record.
   a new `tools/outgoing/cli.mjs` (owner).
 - **Rationale.** These routes have no oikos tool to enforce the check; a rule plus a cheap check is
   what reaches them.
+- **Note.** A vault note leaves this route for the checked `vault` tool once
+  [ADR 0007](0007-mounts.md) D04 is built; until then a shared vault note stays here.

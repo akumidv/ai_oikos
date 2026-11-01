@@ -10,6 +10,7 @@ import YAML from 'yaml';
 import { runCli, isMain, printJson, UsageError } from '../common/cli.mjs';
 import { installRoot, localPath } from '../common/paths.mjs';
 import { fold, missingMessage } from '../common/files.mjs';
+import { SLUG } from '../common/slug.mjs';
 
 /** The installation's catalog file; throws outside an installation. */
 export const catalogFile = () => localPath('catalog.yaml');
@@ -299,7 +300,7 @@ const commands = {
     },
     run(values, [kind, id, path]) {
       if (!kind || !id) throw new UsageError('usage: add counterparty|domain <id> [options] | add root <name> <path>');
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new UsageError(`id '${id}': lowercase latin letters, digits and '-' (e.g. acme-corp)`);
+      if (!SLUG.test(id)) throw new UsageError(`id '${id}': lowercase latin letters, digits and '-' (e.g. acme-corp)`);
       const doc = loadDocument();
       const catalog = loadCatalog();
       const warnings = [];

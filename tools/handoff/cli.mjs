@@ -20,6 +20,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { runCli, isMain, printJson, UsageError } from '../common/cli.mjs';
 import { installRoot, localPath, realOf } from '../common/paths.mjs';
 import { FOLDS_CASE, HOME_OR_NETWORK, PRIVATE_FOLDER, fileRoots, inside, nameProblem, pathProblem, scratchProblem } from '../common/local-files.mjs';
+import { SLUG } from '../common/slug.mjs';
 import { isStoreName } from '../hooks/host.mjs';
 import { DESK_FOLDER } from '../common/desk.mjs';
 
@@ -27,7 +28,6 @@ const TOOL = 'node oikos/tools/handoff/cli.mjs';
 const HANDOFF = 'HANDOFF.md';
 const BACKLOG = 'TASKS.md';
 const TASK_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
-const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const LINE = /^- (\S+) · (.*) · (\S+) · \[handoff\]\(([^)]+)\)\s*$/;
 const SHOWN_CONFLICTS = 5;
 /** What the park does to `.local/TASKS.md`, by upsertLine's action. */

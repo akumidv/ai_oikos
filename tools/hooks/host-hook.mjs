@@ -10,7 +10,9 @@
 // same path, and a misspelled name is visible here rather than as a hook that never ran.
 //
 // Fail open, like the guards themselves: a hook that cannot load must not freeze the session.
-// The user sees what failed and the action goes through unchecked.
+// The user sees what failed and the action goes through unchecked. A guard that keeps a boundary
+// (git-guard, package-guard) catches a failure of its own checks and denies instead, so a throw in
+// them never reaches this fallback.
 import { readPayload, print } from './common.mjs';
 import { WIRING } from './wiring.mjs';
 

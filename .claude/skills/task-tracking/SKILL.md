@@ -8,7 +8,7 @@ metadata:
   group: engineering
 surface: the organization's task tracker — tasks, boards, sprints, goals; reads, and writes after a confirmed dry run
 connectors: jira, github-issues, gitlab-issues
-refuses: a move the installation's rules leave to a person (without rules, any move beyond the early statuses), moving a task whose result is not clear (the assignee is asked instead), deleting issues, and fetching the tracker with a web-fetch tool
+refuses: a move the installation's rules leave to a person (without rules, any move beyond the early statuses), moving a task whose result is not clear (it is judged first, [scenarios/review-result.md](scenarios/review-result.md); the assignee is asked when no result is found), deleting issues, and fetching the tracker with a web-fetch tool
 ---
 
 # task-tracking
