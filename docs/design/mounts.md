@@ -1,0 +1,510 @@
+# Design — mounts: other repositories as sources of skills and notes, never of rules (A9)
+
+Living design concept ([design-flow](../../_aitna/akmon/pipelines/design-flow.md)). Nothing here
+is accepted until the owner says so; accepted commitments then move to an ADR (the next free
+number is 0007) and the implementation steps to [`_aitna/TASKS.md`](../../_aitna/TASKS.md) (A9).
+
+**State:** drafted from an installation's requirement and checked against the core's code and
+the agent hosts' documentation. Every `D-A9-*` point is decided by the owner (§ Open points);
+D-A9-AKMON moved to task A10. The boundary between installations (task A11) builds on the same
+model and is designed in § Linked installations. ADR 0007 is drafted and carries the owner's decisions on the
+audit's points too (§ Open points); it awaits a security re-audit of D04–D05 and the owner's
+acceptance. S1, S2 and S3 are built, uncommitted. **How to resume:** read § Frame, § Survey (the
+corrections to the first draft), § Design, § Linked installations, then § Open points and
+ADR 0007; build § Plan slice by slice, trunk first.
+
+## Frame
+
+- **Problem.** An installation's tree, or the same machine, holds other repositories that oikos
+  should use:
+  - **knowledge vaults**, any number: markdown notes with frontmatter that the organization's
+    knowledge base aggregates; the user reads and writes notes there, like a wiki;
+  - a **development root** governed by another agent framework: its own `CLAUDE.md`/`AGENTS.md`,
+    hooks, skills and tools; development across many repositories happens there, in a session
+    opened in that folder.
+
+  Today oikos knows none of them: `sync` writes nothing for them, the guards treat a repository
+  inside the installation as installation files, and rules leak both ways (§ Survey).
+- **Goal — every direction clean.**
+  1. A session in the installation uses a mount's **skills** and **notes**, never its **rules**
+     (its `CLAUDE.md` and imports). **An installation writes only into itself** (D-A9-VAULT-WRITE):
+     it reads the core, its mounts and its linked installations, and changes none of them. The
+     one route into a mount is a note that the `vault` connector writes into a wiki mount. A
+     development root's own guards (a branch per task, who commits) run only in a session opened
+     there.
+  2. A session opened in a mount gets **none of the installation's rules**: neither `OIKOS.md` nor
+     the person's `.local/AGENTS.md`.
+  3. What is **written into a mount**, above all a vault note, carries nothing of the
+     installation: no rules, no `.local/` content or paths, no absolute paths of this machine, no
+     personal terms, no secrets. No file oikos generates ends up in the mount's commits.
+- **Constraints already decided.**
+  - Nothing about an organization in the core; per-organization data comes from the installation.
+  - Writes need confirmation (OIKOS.md); a vault is local files, so its writes are file writes
+    under the guards. A write command still offers `--dry-run`, as every oikos write command does.
+  - Text that oikos writes into the organization's systems is checked once, in
+    `tools/common/outgoing.mjs` ([ADR 0003](../adr/0003-outward-content.md)). A vault's notes reach
+    the knowledge base, so they are such text.
+  - The desk's phase 3 ([design](desk.md) § Outside systems) and A5 wait on this design. The
+    outside project there and a mount here are the same thing.
+- **Acceptance.**
+  - A session opened in each mount shows none of the installation's files in `/memory`.
+  - An installation session that read a mount's file shows none of the mount's rule files.
+  - A file-tool or shell write into any mount is refused; a note through the `vault` connector
+    into a wiki mount passes when clean.
+  - No file `sync` writes inside a mount shows in that mount's `git status`.
+  - A note naming the installation's absolute root or a `.local/` path is refused.
+
+## Survey — the current code and the hosts
+
+### What the agent hosts do
+
+These rows are checked against the Claude Code documentation (memory, settings, skills, hooks,
+CLI reference).
+
+| Behaviour | Consequence |
+|---|---|
+| `CLAUDE.md` and `CLAUDE.local.md` of the start folder **and every folder above it** load at launch, with their `@imports`. The documentation describes no stop at a git root; for a submodule it says nothing. | A session in a nested mount loads the installation's `CLAUDE.md` → `AGENTS.md` → `OIKOS.md` + `.local/AGENTS.md` (leak 2). |
+| A `CLAUDE.md` in a subfolder of the start folder loads **lazily**, once a file there is read or edited. | An installation session reading a mount's file gets the mount's rules (leak 1). |
+| Skills in `<subfolder>/.claude/skills/` load lazily the same way, and no setting turns this off. | A mount's own skills may be listed next to oikos's pointers (Q2). |
+| `claudeMdExcludes`: globs over **absolute** paths, allowed in any settings layer. The arrays merge; ancestor files and `.claude/rules/**` can be excluded. No "stop at the repository root" setting exists. | The only tool for leaks 1 and 2. |
+| Project settings and hooks come from the start folder's `.claude/`, with no parent fallback. Since v2.1.211, `.claude/settings.local.json` is read and written at the **git repository's root**; whether a submodule counts as its own root is not documented. | The installation's guards do not run in a mount session, and the mount's guards do not run in an installation session. A mount must be a repository top for its local settings to be read (TV, Q3). |
+| `--add-dir`: skills load from it; `CLAUDE.md` loads only with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`; most `.claude/` configuration is not read from it. | A folder **outside** the start folder never loads its rules lazily, which makes an outside mount cheaper (§ Design). |
+
+Qwen Code: not checked (Q1). Codex: no oikos guard is wired for Codex at all (`.codex/hooks.json`
+holds only the akmon hooks), so Codex is in the same position as Qwen for every guard here.
+
+### The core today — what the design builds on
+
+- **Config.** `config()` in `tools/common/config.mjs` reads only known keys, through `part(key)`,
+  and collects problems the way `taskTrackingProblems` does. Those problems already reach
+  `sync --check`, `landscape` and `setup status`. A `mounts` key plugs in the same way.
+- **sync** (`tools/sync/cli.mjs`) is one top-level script.
+  - Skill pointers carry a marker; a marked pointer whose name is not in the list is removed as
+    stale. The link depth `../../../` is hard-wired.
+  - `.mcp.json` and the names in `.local/sync.json` follow "replace only what sync wrote".
+  - `.claude/settings.local.json` is only appended to (`permissions.additionalDirectories`) and
+    nothing is removed from it. A `claudeMdExcludes` that sync owns needs the `sync.json` record
+    MCP already has.
+  - The installation commits its `.claude/skills/` pointers, so a pointer must carry no absolute
+    path.
+- **Guards.**
+  - `package-guard` denies file-tool writes into `oikos/` from an installation; it does not look
+    at the shell.
+  - `write-guard` exports `workingDirs` (`cd` tracking, with an `unknown` flag) and has the only
+    redirection stripper. `secret-guard` has its own inline `cd` tracking.
+  - `git-guard` ignores `-C` and `cd` when it decides which repository a commit is in. It has no
+    tests.
+  - `leaks.mjs` runs `git grep --cached` over the **whole index** of the core for the terms in
+    `~/.config/oikos/private-terms`.
+  - `secret-guard` judges path names only and has no content patterns.
+- **The content check exists — ADR 0003.** `tools/common/outgoing.mjs` provides
+  `outgoingFindings`, a pure function, and `guardOutgoing`, which the write commands call.
+  - Categories `language`, `assistant`, `path`, `secret`, `term`.
+  - Built-in secret patterns (provider token prefixes, private keys, JWTs) and path patterns
+    (home folders, `/mnt/<d>/Users/`, `.local/`, the scratchpad).
+  - The installation's own `terms:` and `allow:` in `.local/outgoing.yaml`.
+  - The `assistant` category already flags the word `oikos`, `oikos.yaml` and `node oikos/tools/`.
+- **Wiki.**
+  - `skills/wiki` picks a connector from `connectors.wiki`; `requireConnector` refuses an
+    unlisted one.
+  - The connectors share the operation set `search`, `read`, `create`, `append`,
+    `replace-section`.
+  - `tools/common/sections.mjs` edits markdown sections purely and skips frontmatter.
+  - `searchPages` sits in `tools/github-wiki/pages.mjs`, not in `common`.
+  - Every write verb must be listed in `tools/hooks/writes.mjs`.
+- **The vault today** is a machine path:
+  - `setup init --vault <path>` writes `obsidian vault: <path>` into `.local/AGENTS.md`, and
+    `setup status` checks it;
+  - OIKOS.md § What lives where names it;
+  - `git-guard` says it covers "a user's vault" too;
+  - `tools/documents/markdown.mjs` finds a vault by its `.obsidian` folder.
+
+  A personal vault often lives **outside** the installation, on another drive.
+- **YAML editing.** `tools/common/tracking-config.mjs` has a comment-preserving YAML splicer, but
+  its exported API is task-tracking-specific. Its generic helpers (`addUnder`, `applied`, …) are
+  private.
+
+### Corrections to the first draft (the installation's handoff)
+
+1. The vault already exists as a machine path (above). Mounts must **migrate** it, not run beside
+   it (D-A9-VAULT).
+2. The first draft required a mount **inside** the installation and declared in the committed
+   `oikos.yaml`. A personal vault is personal, and it is often outside the installation
+   (D-A9-WHERE, D-A9-OUTSIDE).
+3. The draft's "secret guard patterns" for content do not exist in the guards. They exist in
+   `outgoing.mjs`, and a separate `personal-terms` file would duplicate `.local/outgoing.yaml`
+   (D-A9-LEAK).
+4. `leaks.mjs` scans the whole index. In a vault with history it would flag old notes, so a mount
+   would need a scan of the staged **additions** only. Moot since D-A9-VAULT-WRITE: no agent
+   commits inside a mount.
+5. `git-guard` must learn the target repository from `-C`/`cd`. It should reuse write-guard's
+   shell parsing, moved into a shared module, rather than add a third copy.
+6. Mentioning oikos in a note (the draft's Q6) is already decided by ADR 0003: it is an
+   `assistant` finding, refused unless allowed. Keep it consistent, or amend ADR 0003 explicitly.
+
+### Moving an installation (found while the first installation moved)
+
+BOOTSTRAP has Set up, Update and Remove, but nothing on moving an installation folder.
+
+| Item | Behaviour |
+|---|---|
+| The `oikos` symlink | Relative, so it breaks when only the installation moves. `setup init <folder>` recreates a missing link and never overwrites other files. |
+| `.mcp.json` (`OIKOS_HOME`, the core's path) | `sync` rewrites it. |
+| `permissions.additionalDirectories` | Append-only: a stale entry stays when the core moves. |
+| `.local/AGENTS.md` paths | Nobody rewrites them. |
+| `.local/.browser/launch.json` | Keeps the old profile path until the next browser `start`; the default DevTools port and the installation code change, since both come from the folder. |
+| Mount wiring (items 1–3 below) | Holds absolute paths, so a move makes it stale. |
+| The host's per-project data (Claude Code `~/.claude/projects/<encoded path>/`: history, auto memory) | Stays under the old key; moved by hand. |
+| An editor workspace file outside the installation | Names the old folder; fixed by hand. |
+
+Wanted in the core:
+- `sync --check` is red when a generated file (`.mcp.json`, `settings.local.json`,
+  `launch.json`, the mount wiring) names another installation root, and `sync` rewrites them.
+- BOOTSTRAP gets a "Moving an installation" section:
+  1. Relink `oikos/`.
+  2. Run `sync`, then `sync --check`.
+  3. Move the host's project data and fix the editor workspace by hand.
+  4. Pin `OIKOS_CHROME_PORT` if something outside depends on the port.
+  5. Start a new session, with `qwen mcp approve --all` when `.mcp.json` changed.
+
+Moving the folder of a git repository with a submodule keeps the submodule, because its git dir
+path is relative. Backlog: P3-5.
+
+## Design
+
+### Model
+
+A **mount** is a repository that oikos uses as a **source**: of skills, of notes, of material to
+read. It is never a source of rules. Its own rules govern only a session opened in it, and an
+installation session never changes it (D-A9-VAULT-WRITE). An installation declares any number of
+mounts. Another oikos installation registered as a mount is a **linked installation**
+(§ Linked installations).
+
+```yaml
+# oikos.yaml — shared mounts: inside the installation, relative paths
+mounts:
+  vaults/team:                    # relative to the installation's root, '/' separators, nesting allowed
+    use: [wiki]                   # wiki | skills; absent — read only
+    wiki: { name: team, rules: NOTES.md, template: templates/note.md, inbox: inbox/ }
+  projects/dev-root:
+    use: [skills]
+    skills: { from: .claude/skills, prefix: dev, only: [deploy-status, search-artifacts] }
+```
+
+```yaml
+# .local/mounts.yaml — personal mounts: the same schema; a path may be absolute and outside the
+# installation. Git-ignored and never indexed: a personal link is named in no committed file.
+mounts:
+  /path/to/personal/vault:
+    use: [wiki]
+    wiki: { name: own, rules: NOTES.md, template: templates/note.md, inbox: inbox/, default: true }
+  /path/to/dev-root:              # a development root beside the installation
+    use: [skills]
+    skills: { from: .claude/skills, prefix: dev }
+  /path/to/personal-installation: # a linked installation: read only
+```
+
+- **Two layers, the local one wins** (D-A9-WHERE). `config()` merges `.local/mounts.yaml` over
+  `oikos.yaml` by real path: a local entry for a path the shared file declares replaces that
+  entry as a whole. A local entry cannot add writes, since a mount has none.
+- **`use`.** `wiki` makes the mount a source of the `vault` connector; `skills` makes pointers to
+  its skills. Without `use` the mount is read only: its files may be read, nothing is taken from
+  it.
+- **`skills.only`** (D-A9-SKILL-PICK) lists the skill names to point to; absent, every skill under
+  `skills.from`. It keeps out a mount's skill that duplicates one of oikos's own (a tracker or a
+  wiki skill) and would compete for the same requests.
+- **Paths.**
+  - A mount path is a **repository top** (its own `.git`). It is not `oikos/` and not under
+    `.local/`. It is not inside another mount. A shared path is relative and has no `..`; a local
+    path may be absolute.
+  - A repository nested deeper inside a mount, such as a development root's child checkouts, is
+    covered by that mount.
+  - Paths are compared by their real path. Which form the host matches in `claudeMdExcludes`,
+    logical or real, is TV.
+- **oikos does not create a mount**; the user adds the submodule or clone. BOOTSTRAP says how,
+  including `ignore = all` in `.gitmodules` for a repository that commits often (a vault), so the
+  installation does not show it as modified.
+- **No `use: rules`.** The one exception is a wiki's *content* rules (`wiki.rules`): the note
+  schema of that vault, read by the vault connector when it writes a note. They are data rules,
+  not agent rules.
+- **Several wikis.**
+  - Each wiki mount has a `name` (default: its path).
+  - `search` runs over all of them and names the vault of each hit; `read` takes a hit as given.
+  - `create` goes to the vault the user or the task names, else to the one with `default: true`,
+    else it asks.
+  - Which source is asked first, the knowledge base or the vaults' drafts, is set by the
+    installation's `AGENTS.md`.
+- **Inside or outside.**
+  - An **inside** mount needs the exclusion wiring both ways (items 1 and 2 below).
+  - An **outside** mount is not below the installation's start folder, so it never loads its rules
+    lazily (item 1 is moot). The installation is not its ancestor, so item 2 is moot too. It needs
+    `permissions.additionalDirectories` for file access, the guards, and pointers that carry no
+    absolute path in a committed file.
+
+### What `sync` writes per mount
+
+Absolute paths go only into git-ignored local files. `sync` replaces only what it wrote and
+records it in `.local/sync.json` (`{mcp: [...], mounts: {...}}`), so a removed mount entry
+removes its wiring. Build it as `tools/sync/mounts.mjs`, not as more top-level script.
+
+1. **The installation does not load an inside mount's rules.** `sync` adds `claudeMdExcludes` to
+   the installation's `.claude/settings.local.json`: `<abs mount>/**/CLAUDE.md`,
+   `<abs mount>/**/CLAUDE.local.md`, `<abs mount>/**/.claude/rules/**`.
+2. **An inside mount does not load the installation's rules.** `sync` writes `claudeMdExcludes`
+   into `<mount>/.claude/settings.local.json`: the `CLAUDE.md` and `CLAUDE.local.md` of the
+   installation's root and of every folder between it and the mount. The mount's own keys in that
+   file stay; its framework may write the same entries, which is harmless because arrays merge.
+3. **Nothing oikos writes lands in a mount's commits.** Every file `sync` writes inside a mount is
+   added to `<mount>/.git/info/exclude`, unless `git check-ignore` already ignores it. This is
+   local and never changes the mount's committed files.
+4. **Skills** (`use: skills`):
+   - one pointer per skill under `skills.from` (only those in `skills.only` when it is set), named
+     `<prefix>-<name>`, next to oikos's own, with the same marker;
+   - the link is computed for an inside mount;
+   - for an outside mount the pointer is kept out of the installation's commits, either through
+     the installation's `.git/info/exclude` or by a pointer that names the mount and leaves the
+     path to `.local/` (TV, choose at build time);
+   - the pointer says where the skill comes from, that the mount's rules are not loaded, and that
+     work which writes into the mount or needs its guards is done in a session opened there;
+   - running the mount's own tools with its credentials is not part of this task: a mount skill
+     whose steps call such a tool is taken only when the owner accepts that (external
+     capabilities, a later task);
+   - `landscape skills` shows the origin.
+5. **Wiki** (`use: wiki`): every wiki mount is a source of the `vault` connector (§ Vault). Its
+   path enters `permissions.additionalDirectories` when it is outside.
+6. **Checks.** `sync --check` is red when:
+   - a declared mount is missing or not a repository top;
+   - it overlaps `oikos/`, `.local/` or another mount;
+   - two wikis share a name, or more than one is `default`;
+   - a name in `skills.only` is not a skill under `skills.from`;
+   - the wiring of items 1–5 is missing or stale, or names another installation root (a move).
+
+   `setup status` and `landscape` list the mounts with `use`, the layer (shared or local) and the
+   wiki name.
+
+### Guards
+
+- **An installation writes only into itself** (D-A9-VAULT-WRITE). The core is already guarded
+  this way; every mount and every linked installation joins it.
+  - File tools: `package-guard` denies `Edit`/`Write`/`NotebookEdit` of a path inside any mount
+    with "open a session in `<mount>` to change it". `sync`'s own wiring (items 2–3) is written by
+    `sync`, not through the file tools.
+  - Shell: a redirection into a mount is denied, and so are `git` write subcommands (`add`,
+    `commit`, `push`, `checkout`, `reset`, `rebase`, `merge`, `stash`, `tag`) with `-C <mount>` or
+    after a `cd` into it. This uses write-guard's parsing, moved first into a shared
+    `tools/hooks/shell.mjs` without changing its behaviour. `git-guard` takes the target repository
+    from `-C`/`cd` the same way.
+  - Reads stay open.
+- **The `vault` connector is the one route into a mount.** It writes notes into `use: wiki` mounts
+  only, and nothing of the installation goes with them (leak 3, D-A9-LEAK):
+  - every note goes through `outgoingFindings` with the categories `path`, `secret`, `term`, and
+    `assistant` unless the mount sets `mention_assistant: allow` (D-A9-OIKOS-WORD); `language` is
+    off unless the vault's `wiki.rules` sets a language;
+  - the terms are the built-ins, `.local/outgoing.yaml`, and the installation-derived terms: its
+    absolute root, this machine's home path and the names of `.local/` files;
+  - a finding refuses the write with the places named; `allow:` lets a line pass, as ADR 0003
+    defines, and the tool keeps the write commands' override flags.
+
+  Committing the vault is the user's, in their own git client or a session opened in the vault,
+  so no agent commit inside a mount needs a scan.
+- **Latency.** A guard that needs the mounts reads `config()` per call, since every guard is a
+  fresh process. Measure it against the existing two-second test. If it is slow, read the
+  resolved mounts from `.local/sync.json`, which `sync --check` keeps honest.
+- **`session-start`** names the mounts, one line each: what is used, the wiki name, and that a
+  mount is changed only in a session opened there (notes through the `vault` connector aside).
+
+### Vault — the `wiki` connector over wiki mounts
+
+`skills/wiki/connectors/vault.md` documents it, over `tools/vault/cli.mjs`.
+
+| Verb | What it does |
+|---|---|
+| `search` | Title, frontmatter, text; all wikis or `--wiki <name>`. Reuses `searchPages`, moved to `common`. |
+| `read` | A hit as given. |
+| `create` | From `wiki.template`, frontmatter checked against `wiki.rules`, into `wiki.inbox` unless a folder is given. |
+| `append`, `replace-section` | Through `tools/common/sections.mjs`. |
+
+- No frontmatter `id` rename.
+- `--dry-run` as everywhere; the write verbs are listed in `tools/hooks/writes.mjs`.
+- The leak check above runs on every write.
+- The connector is derived from `use: wiki` (D-A9-CONNECTOR): available whenever a wiki mount
+  exists, never the default wiki connector, so knowledge questions still go to the knowledge base
+  first. A request that names a vault or a note selects it; the installation's `AGENTS.md` may
+  set the order.
+
+## Linked installations — the boundary between installations (A11)
+
+The owner's requirement: **no leak in either direction** between an organization's installation
+and a person's own. Private material lives in a separate, personal installation, not in scopes
+inside one installation's `.local/`.
+
+- **What is where** (D-A11-LOCAL-REPO, D-A11-STORES).
+  - An installation's **root is its repository**: the work that is versioned.
+  - `.local/` is never a repository: machine state, secrets, and the person's local and private
+    material. Its stores (desk, footprint, catalog, backlog, people) stay there; a store moves into
+    the root only by the owner's decision for that store.
+- **Registration** (D-A11-READ). Another installation is read only when it is registered as a
+  mount without `use` (§ Model):
+  - in `oikos.yaml` or `.local/mounts.yaml`, the local entry winning;
+  - a personal link goes in `.local/mounts.yaml`, so it is named in no committed file and no index.
+
+  A registered installation can be read at any time, including for a one-off lookup.
+- **The boundary guard** (D-A11-BOUNDARY): on in every installation, never declared.
+  - A path belongs to **another installation** when an ancestor of its real path holds an
+    `oikos.yaml` beside an `oikos/`, and that ancestor is not this installation.
+  - A read there (`Read`, `Grep`, `Glob`, and shell reads by the path tracking of `shell.mjs`) is
+    denied unless the installation is registered: "register it in `.local/mounts.yaml`".
+  - A write there is denied always (§ Guards).
+  - Today only the browser tells installations apart, by the profile path.
+- **What may be changed** (D-A11-SHARED). An installation changes only itself. It reads the core,
+  its mounts and its linked installations, and changes none of them. This is the rule of
+  § Guards; A11 adds only the read side for an unregistered installation.
+- **Transfer: data crosses only on request.** Reading is not moving.
+  - Material goes from one installation into another only through one command, run **in the
+    receiving installation**, so it still writes only into itself: `setup transfer <file in a
+    linked installation> [--to <path>] --dry-run`.
+  - It runs the leak check of the direction, through `outgoingFindings` with the source's terms:
+    - into an organization's installation: the source's personal terms (its
+      `.local/outgoing.yaml`, its `.local/` names);
+    - out of one: the organization's terms, which are its email domain, the internal hosts of
+      its connectors, its tracker key patterns and its `terms`.
+  - It shows the findings, and the user confirms.
+  - A typical case: a summary of footprint reports the user agreed to, taken into the personal
+    installation for a CV.
+
+Plan: after A9 S1 (mounts in `config()`) and S2 (`shell.mjs`).
+
+| Slice | What | Delegate |
+|---|---|---|
+| B1 | The boundary guard for the file tools (reads of an unregistered installation, writes of any) with tests | k_implementer |
+| B2 | The same through `shell.mjs` | k_implementer |
+| B3 | `setup transfer` with the direction's terms (the organization's terms derived from `oikos.yaml`), `--dry-run`, the write verb in `writes.mjs` | k_implementer, then k_auditor (security) |
+| B4 | Docs: OIKOS.md (What lives where: the root is the repository, `.local/` never is; linked installations), BOOTSTRAP.md (a personal installation beside an organization's) | k_mechanic |
+
+TV at build time: how the organization's tracker key patterns are read from `oikos.yaml`; what a
+transfer of a folder means.
+
+## Plan — trunk first
+
+The trunk is the coarsest slice that meets the acceptance condition for rules and writes. Every
+later slice returns to it with the condition still met. The delegate of each slice is named; the
+orchestrator keeps synthesis and the owner dialogue.
+
+| Slice | What | Delegate |
+|---|---|---|
+| S0 | Owner decisions `D-A9-*`, then the ADR 0007 draft; the owner decides. | orchestrator; k_auditor over the ADR draft |
+| **S1 trunk** | `mounts` in `config()`, both layers merged per D-A9-WHERE (local wins), `use`, `skills.only`, with its problems; mount roots in `paths.mjs`; `tools/sync/mounts.mjs` items 1–3 with the `sync.json` record and `--check`; `package-guard` denies file-tool writes into every mount; `session-start` line; tests | k_implementer |
+| S2 | Move write-guard's `workingDirs` and redirection stripper into `tools/hooks/shell.mjs`; behaviour unchanged, tests green | k_mechanic |
+| S3 | Skill pointers with the prefix and `skills.only` (computed link, outside-mount rule), `landscape` origin | k_implementer |
+| S4 | Shell coverage of the write rule: redirections and `git -C`/`cd` write subcommands into any mount; `git-guard` target repository via `shell.mjs`; first `git-guard` tests | k_implementer, then k_auditor (security) |
+| S5 | A moved installation: `sync --check` red on a generated file that names another root (`.mcp.json`, `settings.local.json`, `launch.json`, mount wiring), `sync` rewrites them (P3-5) | k_implementer |
+| S6 | `vault` tool and connector with the leak check (`outgoingFindings` plus derived terms, `mention_assistant`); `wiki` skill; akmon skill-pointer sync | k_implementer, then k_auditor (security) |
+| S7 | `setup mount add … --dry-run` (D-A9-HELPER) on the YAML splicer moved into a generic module; `setup init --vault` migration (D-A9-VAULT) | k_mechanic (extraction), k_implementer |
+| S8 | Docs: OIKOS.md (What lives where: mounts; a mount's rules never load; an installation writes only into itself), DEVELOPMENT.md (Layout: what sync writes, the guards), BOOTSTRAP.md (adding a mount; moving an installation, P3-5), `examples/installation/oikos.yaml` | k_mechanic |
+| Gate | `npm run check`, `npm test` to green; audit of the whole change; live checks by the owner (§ To verify) | k_validator, k_auditor |
+
+Order: S0 → S1 → (S2 ∥ S3 ∥ S6) → S4 → (S5 ∥ S7 ∥ S8) → Gate, then A11's B1–B4 (§ Linked
+installations). S2 is behaviour-preserving and may start at once.
+
+## Open points
+
+| # | Point | State | Options → decision |
+|---|---|---|---|
+| **D-A9-WHERE** | Where mounts are declared | **decided (owner): B** | `oikos.yaml` for shared mounts plus `.local/mounts.yaml` for personal ones, one schema; a local entry replaces a shared entry of the same path (owner, 2026-10-28). A personal mount is never named in a committed file. |
+| **D-A9-OUTSIDE** | May a mount live outside the installation? | **decided (owner): yes** | An absolute path, in the local layer only. An outside mount needs less wiring: no lazy rules, no ancestor chain. |
+| **D-A9-VAULT** | The existing vault model (`setup init --vault`, `obsidian vault:` in `.local/AGENTS.md`) | **decided (owner): A, migrate** | `--vault` writes a personal wiki mount into `.local/mounts.yaml`; `setup status` checks the mount; the `obsidian vault:` line goes; OIKOS.md follows. |
+| **D-A9-LEAK** | The leak check of text written into a mount | **decided (owner): A** | `outgoingFindings` with the categories `path`, `secret`, `term` (and `assistant` per D-A9-OIKOS-WORD); the terms are the built-ins, `.local/outgoing.yaml` and the derived installation terms. `language` is off unless `wiki.rules` sets one. A hook only denies: the way past a false finding is an `allow:` line. It runs in the `vault` connector (§ Guards). Rejected: B, a new `.local/personal-terms`. |
+| **D-A9-OIKOS-WORD** | A note that mentions oikos (Q6) | **decided (owner): C** | `assistant` is on by default, as ADR 0003 has it; a mount may set `mention_assistant: allow` (a personal vault, where notes about one's own tools are normal). ADR 0003 is not amended. |
+| **D-A9-CONNECTOR** | Is the `vault` connector derived from `use: wiki`, or also listed in `connectors.wiki`? | **decided (owner): A, derived** | Any wiki mount makes `vault` available; it is never the default wiki connector; a request that names a vault or a note selects it; the installation's `AGENTS.md` may set the order. |
+| **D-A9-VAULT-WRITE** | May an installation session write into a mount? | **decided (owner): A** | An installation writes only into itself. The file tools and the shell never write into a mount; the `vault` connector writes notes into `use: wiki` mounts, with the leak check. The first draft's `write:` key is gone. |
+| **D-A9-SKILL-PICK** | Which of a mount's skills get pointers | **decided (owner): a filter** | `skills.only: [names]`; absent, all of them. It keeps out a skill that duplicates one of oikos's own. |
+| **D-A9-HELPER** | `setup mount add <path> --use … --dry-run`, or the user edits the YAML | **decided (owner): the helper** | Built in S7, after the splicer is extracted. It writes to `.local/mounts.yaml` or `oikos.yaml` by `--personal`/`--shared`, and takes `--use` and `--skills-only`. |
+| **D-A9-AKMON** | Is an installation itself attached to akmon? | **moved out of A9 (owner)** | akmon is meant for developing code, agents and skills in installations too, attached more softly than for developers, since oikos users are not developers; the model is task A10. A9 assumes no akmon in an installation and must not block one: a mount's exclusion wiring and the guards stay valid if an installation later carries `_aitna/`. |
+| **D-A9-SHAPES** | The resolved mount and the `sync.json` record of S1 | **decided (owner): accepted** | `{ path, layer, root, inside, use, skills, wiki, mention_assistant }`; `mounts: { <real root>: { installExcludes, installDirs, excludes, created, ignored, pointers, installIgnored } }`. |
+| **D-A9-SELF-UNLOCK** | An agent edits the mounts list, then writes into the dropped mount (audit) | **decided (owner): A** | The file tools may not edit `.local/mounts.yaml` or the `mounts:` part of `oikos.yaml`; mounts change through `setup mount add\|remove --dry-run`. Rejected: B, rely on the write's confirmation. |
+| **D-A9-PERSONAL-POINTERS** | A personal mount's pointer lands in the organization's commits (audit) | **decided (owner): A, with an opt-in** | Pointers of personal and outside mounts go into the installation's `info/exclude`; the user may set `skills.commit: true` on a personal inside mount to commit them. Rejected: B, no pointers for personal mounts. |
+| **D-A9-VAULT-TERMS** | Is a note into a personal vault checked against the organization's terms? (audit) | **decided (owner): A** | Yes, every note in either layer. Rejected: B, secrets and paths only. |
+| **D-A9-LOCAL-NARROW** | A local entry widens a shared one (audit) | **decided (owner): A** | Whole replacement stays, but a local entry cannot add `wiki` to `use` or set `mention_assistant: allow`; the attempt is a problem and is dropped. Rejected: B, the local entry may do anything. |
+| **D-A9-OVERRIDE** | How a vault note with a finding passes (audit) | **decided (owner): A** | Only an `allow:` line of `.local/outgoing.yaml`; no `--allow-flagged` on the `vault` tool. Rejected: B, the flag as on other writes. |
+| **D-A9-0003-SCOPE** | ADR 0007's relation to ADR 0003 (audit) | **decided (owner): as recommended** | ADR 0007 refines ADR 0003 for vault notes: they leave D05's unchecked routes for D01's checked route, and their override is narrower than D03's. This replaces "ADR 0003 is not amended" of D-A9-OIKOS-WORD. |
+| **D-A11-COPY** | Text read from a linked installation and written here by the file tools (audit) | **decided (owner): A** | A rule in OIKOS.md, not machine-checked: such material moves only through `setup transfer`. Rejected: B, no reads of linked installations. |
+| **D-A11-DIRECTION** | Which terms `setup transfer` checks (audit) | **decided (owner): A** | The terms of both installations together, either way. Rejected: B, a `kind: personal` label. |
+| Q1 | Qwen Code: context-file loading across a `.git` boundary, an exclude setting, skills from a subfolder | open | Until known, Qwen gets items 3–5 and the guards, not 1–2. Codex likewise (no oikos guards wired). |
+| Q2 | A mount's own skills load lazily next to the pointers (no switch), so a skill may be listed twice | leaning | Accept; the prefix keeps the names apart. Check live. |
+| Q3 | `<mount>/.claude/settings.local.json` read at the submodule's root | open | Check live: settings.local.json follows the git root since v2.1.211. |
+| Q4 | Shell coverage: the known gaps of L2 (globs, `find -exec`) | leaning | Accept; the file tools and the `vault` tool are the main routes. |
+
+## Rejected (candidates)
+
+- **`--add-dir` per session, no mounts.** Skills come and rules do not, but it is per session and
+  per host and nothing is written down; leaks 2 and 3 are untouched and there is no write guard.
+- **Shared `claudeMdExcludes` in the committed `.claude/settings.json`** with relative globs
+  (`**/vault/**/CLAUDE.md`). Globs over absolute paths with a bare `**/` match far outside the
+  installation, and the mount side needs a file in the mount anyway. *Revisit if* the hosts accept
+  project-relative patterns.
+- **Let the mount's framework write its own ancestor exclusions** ("rules stop at my git root").
+  Good and general, and a framework may do it; oikos still writes item 2, since it knows which
+  ancestors are its own.
+- **One wiki per installation.** Rejected by the owner: several vaults are mounted.
+- **A separate `personal-terms` file** (first draft). It would duplicate `.local/outgoing.yaml`
+  (D-A9-LEAK). *Revisit if* the terms for mounts must differ from the terms for outgoing text.
+- **`write: allow | deny` per mount** (first draft). Replaced by D-A9-VAULT-WRITE: an installation
+  writes only into itself, and notes go through the `vault` connector.
+- **Scopes inside one installation's `.local/`**, the installation's env-scopes handoff:
+  `.local/work` and `.local/personal` as two repositories, a store resolver, `--scope` per item.
+  Rejected by the owner: the root is the work repository, `.local/` is never one, and private
+  material lives in a separate installation (§ Linked installations). *Revisit if* a separate
+  installation leaves a gap.
+
+## To verify (live, by the owner)
+
+- A session in each mount shows none of the installation's files in `/memory`.
+- An installation session that read a mount's file shows none of the mount's rule files.
+- Q1 Qwen; Q2 duplicate listing; Q3 settings read at a submodule's root.
+- `claudeMdExcludes` matches a mount reached through a symlink: logical path or real path.
+
+## Tests (each fails without the change)
+
+A temporary installation with three `git init` mounts: two wikis (one nested, `vaults/team`, and
+one outside, in the local layer), a skills mount, and a second installation beside it.
+
+- `sync` wiring:
+  - `sync` writes items 1–3 with absolute paths only in local files; a second run changes nothing;
+  - a user's own `claudeMdExcludes` entries and other keys stay; removing an entry removes its
+    wiring;
+  - a mount's `settings.local.json` lands in its `.git/info/exclude` when not ignored.
+- `sync --check` is red for: a missing mount, a mount under `.local/`, overlapping mounts, two
+  wikis with one name, two defaults, stale wiring.
+- Skill pointers: the prefix, the marker, removal with the entry; no absolute path in a committed
+  file.
+- `config()`: a local entry replaces the shared entry of the same path; `skills.only` keeps only
+  the listed skills; an unknown name there is a problem.
+- The write guard:
+  - denies Edit/Write, a shell redirection and `git -C <mount> commit` into every mount, a wiki
+    mount included;
+  - allows reads.
+- The leak check of the `vault` connector:
+  - refuses a note that names the installation's root, a `.local/` path or a
+    `.local/outgoing.yaml` term;
+  - refuses a note that names oikos, unless the mount sets `mention_assistant: allow`;
+  - passes a clean note.
+- The boundary (A11):
+  - a read of an unregistered installation is denied, a read of a registered one is allowed;
+  - a write into either is denied;
+  - `setup transfer --dry-run` lists the direction's findings and writes nothing.
+- `git-guard` takes the target repository from `-C` and from `cd`.
+- The `vault` tool:
+  - search across both wikis with the wiki named per hit, and with `--wiki`; read;
+  - create in the default wiki and in a named one, from the template, with the frontmatter
+    checked;
+  - a note with a secret or a leak term is refused.
+
+## Files the change touches
+
+`tools/common/config.mjs`, `tools/common/paths.mjs`, `tools/sync/cli.mjs`, `tools/sync/mounts.mjs`
+(new), `tools/hooks/shell.mjs` (new), `tools/hooks/package-guard.mjs`, `tools/hooks/git-guard.mjs`,
+`tools/hooks/leaks.mjs`, `tools/hooks/session-start.mjs`, `tools/hooks/writes.mjs`,
+`tools/common/outgoing.mjs` (derived terms), `tools/setup/cli.mjs`, `tools/landscape/cli.mjs`,
+`tools/vault/cli.mjs` (new), `tools/common/tracking-config.mjs` (splicer moved out),
+`skills/wiki/SKILL.md`, `skills/wiki/connectors/vault.md` (new), `examples/installation/oikos.yaml`,
+OIKOS.md, DEVELOPMENT.md, BOOTSTRAP.md, tests.

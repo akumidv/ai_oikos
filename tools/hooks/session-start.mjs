@@ -10,8 +10,21 @@ import { lookup, localEnvFile } from '../common/env.mjs';
 import { CORE_ROOT, INSTALL_FILE, installRoot, installProblem } from '../common/paths.mjs';
 import { catalogFile, loadCatalog, summaryLines } from '../catalog/cli.mjs';
 import { loadAgents } from '../common/landscape.mjs';
+import { config } from '../common/config.mjs';
 import { neededKeys } from '../setup/tokens.mjs';
 import { print } from './common.mjs';
+
+/** One line for a mount: what it is used for, the wiki's name, and where it is changed. */
+function mountLine(m) {
+  const used = [m.wiki ? `wiki '${m.wiki.name}'` : null, m.skills ? 'skills' : null].filter(Boolean).join(' and ') || 'read only';
+  const notes = m.wiki ? ' (notes of a wiki go through the `vault` connector)' : '';
+  return `- ${m.path} (${m.layer}): ${used}; changed only in a session opened there${notes}, never from this one`;
+}
+
+/** The context block that names the mounts, one line each; none when there are no mounts. */
+const mountsContext = (mounts) => (mounts.length
+  ? [`Mounts — other repositories this installation uses as sources, never of rules:\n${mounts.map(mountLine).join('\n')}`]
+  : []);
 
 export function run() {
   const root = installRoot();
@@ -49,6 +62,7 @@ export function run() {
     context.push(`Standing agents switched on here (agents: in ${INSTALL_FILE}) — start one by naming it, or read its charter:\n`
       + on.map((a) => `- ${a.dir}: ${String(a.description).split(/(?<=\.)\s/)[0].slice(0, 160)} (${a.file})`).join('\n'));
   }
+  context.push(...mountsContext(config().mounts));
   const catalog = catalogFile();
   if (existsSync(catalog)) {
     try {

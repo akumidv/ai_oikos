@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // oikos for one installation: what is set up and what is missing (`status`), the installation's
-// skeleton (`init [dir]`), and personal tokens typed by the user into their own terminal (`token`).
+// skeleton (`init [dir]`), personal tokens typed by the user into their own terminal (`token`), and the
+// declaration of mounts (`mount add|remove`, tools/setup/mount.mjs).
 // An installation is a folder per organization or project holding oikos as `oikos/`; its root is
 // the organization's (AGENTS.md, oikos.yaml, resources/, LANDSCAPE.md), its `.local/` this
 // machine's and person's, git-ignored. A token is never printed, never passed on the command line
@@ -11,11 +12,13 @@ import { join, relative, resolve, isAbsolute } from 'node:path';
 import { platform } from 'node:os';
 import { runCli, UsageError } from '../common/cli.mjs';
 import { CORE_ROOT, lookup, gitUserEmail, localEnvFile } from '../common/env.mjs';
-import { INSTALL_FILE, installRoot, installProblem, realOf } from '../common/paths.mjs';
+import { INSTALL_FILE, installRoot, installProblem, realOf, isRepoTop } from '../common/paths.mjs';
+import { mountFacts } from '../common/mounts.mjs';
 import { configFile, config, listedConnectors } from '../common/config.mjs';
 import { PEOPLE_IGNORE_COMMENT, PEOPLE_IGNORE_LINE } from '../common/people.mjs';
 import { TOKENS, needed, whoamiTools, tokensToAsk } from './tokens.mjs';
 import { defaultPort } from '../browser/cli.mjs';
+import { mountCommand } from './mount.mjs';
 
 const CORE_REAL = realpathSync(CORE_ROOT);
 
@@ -180,6 +183,11 @@ function whoami(tool) {
   return { ok: r.status === 0, text };
 }
 
+/** One status row per mount: ok when its repository is there, with its layer, place and use. */
+function mountRows(mounts, row) {
+  for (const m of mounts) row(isRepoTop(m.root), `mount ${m.path}`, mountFacts(m));
+}
+
 const has = (cmd, args = ['--version']) => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
 
 const commands = {
@@ -226,6 +234,7 @@ const commands = {
         if (memory) row(existsSync(memory), 'personal memory note', memory);
       }
       { const mcp = existsSync(join(dir, '.mcp.json')); row(mcp, '.mcp.json', mcp ? '' : 'run `node oikos/tools/sync/cli.mjs`'); }
+      mountRows(conf.mounts, row);
 
       console.log('Credentials (.local/.env → oikos.yaml → environment; values are never shown):');
       // A value from the shell environment works, but every installation on the machine sees it.
@@ -358,6 +367,8 @@ const commands = {
       return 0;
     },
   },
+
+  mount: mountCommand,
 };
 
 runCli('setup', commands);

@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 // What oikos reaches and with which skill and connector, computed on request from the skills'
 // frontmatter, the installation's oikos.yaml and its resource notes
-// (tools/common/landscape.mjs) — the overview is never written into a file.
+// (tools/common/landscape.mjs) — the overview is never written into a file. The mounts (other
+// repositories used as sources, tools/common/mounts.mjs) and the skills they offer are listed too.
 import { runCli, printJson, UsageError } from '../common/cli.mjs';
 import { loadLandscape, GROUPS } from '../common/landscape.mjs';
+import { config } from '../common/config.mjs';
+import { mountFacts } from '../common/mounts.mjs';
+import { mountSkills } from '../common/mount-skills.mjs';
 
 const AUTH = { none: 'none', git: 'git access', token: 'personal API token', connector: 'claude.ai connector', browser: 'browser sign-in (user)', sso: 'SSO' };
 
@@ -38,7 +42,35 @@ function printAgent(a) {
   console.log(`${a.dir} — ${a.description}\n  skills: ${a.skills.join(', ')} · owns: .local/${a.owns}/\n  switched on here: ${a.enabled ? 'yes' : 'no (agents: in oikos.yaml)'}\n  read: ${a.file}\n`);
 }
 
+/** One mount: how it is declared and used, and the pointers of the skills it offers. */
+function printMount(m) {
+  const names = mountSkills(m).map((s) => s.name);
+  console.log(`${m.path} — ${mountFacts(m)}${names.length ? `\n  skills: ${names.join(', ')}` : ''}\n`);
+}
+
+/** The skills the mounts offer, with the origin each pointer says (the mount as declared and its layer). */
+function printMountSkills(names) {
+  const rows = config().mounts.flatMap((m) => mountSkills(m).map((s) => ({ m, s })));
+  const shown = names.length ? rows.filter(({ s }) => names.includes(s.name)) : rows;
+  if (!shown.length) return;
+  console.log('## mounts — skills of other repositories, pointed to beside oikos\'s; the mount\'s own rules are not loaded\n');
+  for (const { m, s } of shown) {
+    console.log(`${s.name} — ${s.description}\n  origin: the skill ${s.dir} of the mount ${m.path} (${m.layer} layer, ${m.inside ? 'inside' : 'outside'} the installation)\n  read: ${s.file}\n`);
+  }
+}
+
 const commands = {
+  mounts: {
+    help: 'the mounts: other repositories this installation uses as sources — path, layer, inside or outside, use, wiki name, the skills offered [path…]',
+    options: {},
+    run(v, paths) {
+      const shown = pick(config().mounts, 'path', paths, 'mount');
+      if (v.json) return printJson(shown.map((m) => ({ ...m, skills: mountSkills(m) })));
+      if (!shown.length) console.log('No mounts: oikos.yaml and .local/mounts.yaml declare none.');
+      for (const m of shown) printMount(m);
+      warn(config().problems);
+    },
+  },
   agents: {
     help: 'the standing agents: what each does, the skills it uses, what it owns and whether this installation switches it on [name…]',
     options: {},
@@ -83,7 +115,9 @@ const commands = {
     options: {},
     run(v, names) {
       const { skills, resources, problems } = loadLandscape();
-      const shown = pick(skills, 'dir', names, 'skill');
+      const mountNames = config().mounts.flatMap((m) => mountSkills(m).map((s) => s.name));
+      const own = names.filter((n) => !mountNames.includes(n));
+      const shown = names.length && !own.length ? [] : pick(skills, 'dir', own, 'skill');
       if (v.json) return printJson(shown);
       // By group, in GROUPS order; a skill whose group is missing or unknown comes last, under '?'.
       const groups = [...Object.keys(GROUPS), '?'];
@@ -94,6 +128,7 @@ const commands = {
         console.log(`## ${g} — ${GROUPS[g] || 'no valid metadata.group'}\n`);
         for (const s of inGroup) printSkill(s, resources);
       }
+      printMountSkills(names);
       warn(problems);
     },
   },

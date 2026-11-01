@@ -56,6 +56,9 @@ run from an installation or with `OIKOS_HOME`.
   — the installation's `.local/.env` and browser profile are copied by the user (Chrome stopped).
   Done except the chrome-devtools MCP in a live session (start was too slow, now pinned).
 - P3-4 · Repository name and first push · active · The user decides the name and pushes
+- P3-5 · Moving an installation · active · BOOTSTRAP says how to move an installation folder
+  — relink `oikos/` (`setup init <folder>`), `sync`, `sync --check`, a new session; what sync rewrites and
+  what it does not: [mounts design § Moving an installation](../docs/design/mounts.md#moving-an-installation-found-while-the-first-installation-moved)
 
 ## Features carried over
 
@@ -155,4 +158,22 @@ run from an installation or with `OIKOS_HOME`.
 - A6 · Fixes found in the first run · active · Greek letters no longer count as non-English — ADR 0003 D02 amended (owner, 2026-10-27), built in `nonLatinLetters` with a test, left: owner review and commit. People lookup (alias → account): [ADR 0006](../docs/adr/0006-desk-agent.md) D06 — `.local/private.yaml`, file first, then the connector's search, then add; tool `people`, git-ignored line forced by `setup init` and `sync`; building
 - A7 · akmon: develop and deliver standing agents · active · Prompt in the design's appendix; the owner runs it in an akmon session
 - A8 · Context-pressure advice names the desk · active · The hook advises `park … .local/<task>/`; with the desk it advises a topic card first
-- A9 · Mounts in the core · deferred · Design from the installation's handoff (an outside project as a source of skills and wiki, never of rules); A5 waits on it
+- A9 · Mounts in the core · active · Mounts give skills and notes, never rules; leaks guarded both ways
+  — [design](../docs/design/mounts.md); every `D-A9-*` decided (2026-10-28): shared + `.local/mounts.yaml` with the local entry winning,
+  outside mounts, vault migrated, helper, leak check through `outgoingFindings`, `mention_assistant` per mount, `vault` derived from
+  `use: wiki`, an installation writes only into itself (notes through `vault` only), `skills.only`; next: ADR 0007, then the trunk slice
+  S1 (config, sync wiring items 1–3, file-tool write guard over every mount); A5, A11 and the desk's phase 3 wait on it
+- A10 · akmon in installations · active · Authoring agents and skills in an installation under akmon, attached softly for non-developers
+  — [design](../docs/design/akmon-in-installations.md) drafted: the `guided` actor of akmon's actor work, the core's pinned akmon, oikos `sync`
+  as the one writer, on demand; every `D-A10-*` decided as recommended (2026-10-28); next: the owner runs the akmon prompt in the design's
+  appendix; waits on akmon's guided profile
+- A11 · Work and personal kept apart · active · No leak either way between an organization's installation and a personal one
+  — [design](../docs/design/mounts.md) § Linked installations; decided (2026-10-28): the root is the work repository, `.local/` never is
+  and its stores stay; another installation is read only when registered as a mount (shared or `.local/`, local wins); the boundary guard
+  always on; an installation changes only itself; data crosses only by `setup transfer`, run in the receiving installation with the
+  direction's leak check; scopes inside one `.local/` rejected. Slices B1–B4 after A9 S1 and S2. The handoff's move findings are in A9
+  (slice S5) and P3-5
+- P1-5 · `oikos/` as a pinned submodule · active · One way to link the core into every installation, instead of a symlink
+  — not designed yet: a public-url submodule pinned to a commit, a `local` remote on this machine's core checkout (push off), objects
+  via `--reference`/alternates; one update command (fetch from local, checkout, sync), the user commits the new pointer; risk: a pinned
+  commit missing from origin lost after gc or rebase in the core. Later (not now): akmon attached to an installation through oikos (A10)

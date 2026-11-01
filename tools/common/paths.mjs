@@ -13,7 +13,7 @@
 // the core itself never is one. None found is an error for a tool that needs it, never a fallback
 // to the core — the core keeps nothing of any installation.
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CORE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -47,6 +47,21 @@ export function realOf(path) {
   }
   return join(real(at) || at, ...rest);
 }
+
+/** Whether the real path `path` is `dir` itself or inside it (both real, as realOf gives them). */
+export function isWithin(path, dir) {
+  const rel = relative(dir, path);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * The real root of a mount declared as `path` in the configuration: absolute, or relative to the
+ * installation `root`, with every link resolved (a mount may be a link, a submodule, a mount point).
+ */
+export const mountRoot = (root, path) => realOf(resolve(root, path));
+
+/** Whether `dir` is a repository top: it has a `.git` of its own, a folder or a submodule's file. */
+export const isRepoTop = (dir) => existsSync(join(dir, '.git'));
 
 /** Whether `dir` is the core checkout this code runs from (through any link). */
 export const isCore = (dir) => real(dir) === real(CORE_ROOT);

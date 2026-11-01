@@ -16,6 +16,9 @@ import { isDeepStrictEqual } from 'node:util';
 import YAML from 'yaml';
 import { UsageError } from './cli.mjs';
 import { isRepo, numberOwner, REPO_LISTS, taskTrackingProblems, TRACKERS } from './transitions.mjs';
+import {
+  addToMap, addUnder, appendToSeq, applied, contentEnd, isNullNode, keyOf, lineEnd, lineStart, pairOf, parsed, scalarSplice, scalarText, splice,
+} from './yaml-splice.mjs';
 
 /** The lists of a project that grow, in the order a new project block writes its keys. */
 export const PROJECT_LISTS = Object.freeze(['key_aliases', 'repos', 'extended_repos', 'number_repos', 'number_patterns', 'epic_projects']);
@@ -28,7 +31,6 @@ export const PROJECT_POLICY = 'policy';
 const POLICY_SOURCE = `${PROJECT_POLICY}.source`;
 
 const ROOT = 'task-tracking';
-const INDENT = 2;
 const lower = (text) => String(text).trim().toLowerCase();
 
 /**
@@ -52,20 +54,6 @@ export function poolRepoArgs(repos, tool) {
 }
 
 // == reading a document ==
-
-function parsed(text) {
-  const doc = YAML.parseDocument(text);
-  if (doc.errors.length) throw new UsageError(`oikos.yaml does not parse: ${doc.errors[0].message.split('\n')[0]}`);
-  return doc;
-}
-
-const keyOf = (pair) => (YAML.isScalar(pair.key) ? pair.key.value : pair.key);
-const isNullNode = (node) => node === null || node === undefined || (YAML.isScalar(node) && node.value === null);
-
-/** The pair of `map` under `key` (compared case-insensitively when `anyCase`), or undefined. */
-function pairOf(map, key, anyCase = false) {
-  return map.items.find((pair) => (anyCase ? lower(keyOf(pair)) === lower(key) : String(keyOf(pair)) === key));
-}
 
 /** The project's key as the file spells it, or `projectKey` upper-cased when the file has none. */
 function projectKeyIn(doc, connector, projectKey) {
@@ -187,117 +175,6 @@ function changedPolicy(after, given, added, present, replaced) {
   if (added[PROJECT_POLICY].length || replaced.includes(POLICY_SOURCE)) after[PROJECT_POLICY] = next;
 }
 
-// == splicing into the source ==
-
-/** The text of `value` as one YAML scalar, safe in a flow collection when `flow`. */
-function scalarText(value, { flow = false } = {}) {
-  if (typeof value === 'string' && value.includes('\n')) return JSON.stringify(value);
-  const doc = new YAML.Document(flow ? [value] : value);
-  if (flow) doc.contents.flow = true;
-  const text = doc.toString({ lineWidth: 0, flowCollectionPadding: false }).trim();
-  return flow ? text.slice(1, -1) : text;
-}
-
-/** `value` (a mapping) as block YAML whose lists are flow `[a, b]`, its lines indented by `indent`. */
-function blockText(value, indent) {
-  const doc = new YAML.Document(value);
-  YAML.visit(doc, { Seq: (_, node) => { node.flow = true; } });
-  return doc.toString({ lineWidth: 0, flowCollectionPadding: false, indent: INDENT }).trimEnd()
-    .split('\n').map((line) => `${' '.repeat(indent)}${line}`).join('\n');
-}
-
-/** `value` (a mapping's entries) as the inside of a flow mapping: `a: [x], b: y`. */
-function flowEntries(value) {
-  const doc = new YAML.Document(value);
-  YAML.visit(doc, { Map: (_, node) => { node.flow = true; }, Seq: (_, node) => { node.flow = true; } });
-  return doc.toString({ lineWidth: 0, flowCollectionPadding: false }).trim().slice(1, -1);
-}
-
-const lineStart = (text, at) => text.lastIndexOf('\n', at - 1) + 1;
-const lineEnd = (text, at) => {
-  const end = text.indexOf('\n', at);
-  return end < 0 ? text.length : end;
-};
-const column = (text, at) => at - lineStart(text, at);
-/** Where a node's content ends, without the line breaks a block node's range carries. */
-function contentEnd(text, node) {
-  let end = node.range[1];
-  while (end > node.range[0] && /\s/.test(text[end - 1])) end -= 1;
-  return end;
-}
-
-/** One splice: replace `[from, to)` of the source with `insert`. */
-const splice = (from, to, insert) => ({ from, to, insert });
-
-/** The splice that appends `values` to the list node `seq`. */
-function appendToSeq(text, seq, values) {
-  if (seq.flow) {
-    const close = text.lastIndexOf(']', seq.range[1]);
-    let at = close;
-    while (at > seq.range[0] + 1 && /\s/.test(text[at - 1])) at -= 1;
-    const items = values.map((v) => scalarText(v, { flow: true })).join(', ');
-    return splice(at, at, `${seq.items.length ? ', ' : ''}${items}`);
-  }
-  const last = seq.items[seq.items.length - 1];
-  const dash = ' '.repeat(column(text, seq.range[0]));
-  const at = lineEnd(text, contentEnd(text, last));
-  return splice(at, at, values.map((v) => `\n${dash}- ${scalarText(v)}`).join(''));
-}
-
-/** The splice that adds the entries of `value` (a plain object) to the mapping node `map`. */
-function addToMap(text, map, value) {
-  if (map.flow || !map.items.length) {
-    const close = text.lastIndexOf('}', map.range[1]);
-    let at = close;
-    while (at > map.range[0] + 1 && /\s/.test(text[at - 1])) at -= 1;
-    return splice(at, at, `${map.items.length ? ', ' : ''}${flowEntries(value)}`);
-  }
-  const indent = column(text, map.items[0].key.range[0]);
-  const last = map.items[map.items.length - 1];
-  const at = lineEnd(text, contentEnd(text, last.value ?? last.key));
-  return splice(at, at, `\n${blockText(value, indent)}`);
-}
-
-/** The splice that gives the pair `pair`, whose value is empty (null), the mapping `value`. */
-function fillPair(text, pair, value) {
-  const indent = column(text, pair.key.range[0]) + INDENT;
-  const empty = pair.value;
-  const from = empty?.range && empty.range[1] > empty.range[0] ? empty.range[0] : null;
-  const at = lineEnd(text, from ?? pair.key.range[1]);
-  if (from === null) return [splice(at, at, `\n${blockText(value, indent)}`)];
-  // An explicit `null` or `~` after the key goes, with the blank before it: the mapping takes its
-  // place on the next lines.
-  let start = from;
-  while (start > 0 && text[start - 1] === ' ') start -= 1;
-  return [splice(start, empty.range[1], ''), splice(at, at, `\n${blockText(value, indent)}`)];
-}
-
-/** The splices that add `value` under `path` (from the top level), creating what is missing. */
-function addUnder(text, doc, path, value) {
-  let node = doc.contents;
-  if (!YAML.isMap(node)) {
-    if (!isNullNode(node)) throw new UsageError('oikos.yaml: the top level must be a mapping');
-    return [splice(text.length, text.length, `${text && !text.endsWith('\n') ? '\n' : ''}${blockText(nest(path, value), 0)}\n`)];
-  }
-  for (let i = 0; i < path.length; i += 1) {
-    const pair = pairOf(node, path[i]);
-    const rest = nest(path.slice(i + 1), value);
-    if (!pair) {
-      if (node === doc.contents && !node.flow) {
-        // A new top-level part goes at the end of the file, after whatever comments close it.
-        return [splice(text.length, text.length, `${text && !text.endsWith('\n') ? '\n' : ''}${blockText({ [path[i]]: rest }, 0)}\n`)];
-      }
-      return [addToMap(text, node, { [path[i]]: rest })];
-    }
-    if (isNullNode(pair.value)) return fillPair(text, pair, rest);
-    if (!YAML.isMap(pair.value)) throw new UsageError(`oikos.yaml: ${path.slice(0, i + 1).join('.')} must be a mapping`);
-    node = pair.value;
-  }
-  return [addToMap(text, node, value)];
-}
-
-const nest = (path, value) => path.reduceRight((inner, key) => ({ [key]: inner }), value);
-
 /** The splices that turn the existing project mapping `project` into `after`. */
 function editProjectNode(text, project, after, added, replaced) {
   const splices = [];
@@ -340,15 +217,6 @@ function editProjectNode(text, project, after, added, replaced) {
   return splices;
 }
 
-/** The text of a scalar node `node` of the pair `pair`, replaced by `value`, or set when it is empty. */
-function scalarSplice(text, pair, value) {
-  const node = pair.value;
-  if (node?.range && node.range[1] > node.range[0]) return splice(node.range[0], contentEnd(text, node), value);
-  // `results:` with nothing after it: the value goes right after the colon, before any comment.
-  const colon = text.indexOf(':', pair.key.range[1]) + 1;
-  return splice(colon, colon, ` ${value}`);
-}
-
 /**
  * The splices that bring the project's `policy` to `policy`: `change.statuses` appended to
  * `person_only`, `source` replaced when `change.source` is set; a missing `policy` goes into `missing` whole.
@@ -377,12 +245,6 @@ function policySplices(text, project, policy, { statuses, source }, missing) {
   }
   if (Object.keys(grown).length) splices.push(addToMap(text, node, grown));
   return splices;
-}
-
-function applied(text, splices) {
-  let out = text;
-  for (const s of [...splices].sort((a, b) => b.from - a.from)) out = `${out.slice(0, s.from)}${s.insert}${out.slice(s.to)}`;
-  return out;
 }
 
 /**
@@ -422,7 +284,7 @@ export function editTrackerProject(text, connector, projectKey, change) {
   if (!changed) return { text, key, before, after, added, present, replaced, changed };
 
   const project = doc.getIn(path, true);
-  const splices = YAML.isMap(project) ? editProjectNode(text, project, after, added, replaced) : addUnder(text, doc, path, after);
+  const splices = YAML.isMap(project) ? editProjectNode(text, project, after, added, replaced) : addUnder(text, doc, path, after, 'oikos.yaml');
   const out = applied(text, splices);
 
   const result = YAML.parseDocument(out);

@@ -215,7 +215,7 @@ The agent cannot clear its own context; three mechanisms carry the load:
 ### Outside systems (phase 3)
 
 Depends on the mounts design (a folder of an outside project mounted into an installation as a
-source of skills and wiki, never of rules — a handoff exists, the core backlog has no line yet).
+source of skills and wiki, never of rules — [mounts design](mounts.md), backlog A9).
 Review of a pull request: oikos finds it by key (`code-hosting`), runs the mount's review skill
 on the reference, takes the report into the topic folder, compares it with "Done when", drafts
 the comment and the proposal. Read and review skills run from the installation's root; anything

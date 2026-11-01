@@ -155,7 +155,8 @@ test('oikos/ is read-only in an installation, the installation itself is not', (
   assert.equal(edit(join(dir, 'oikos', 'skills', 'wiki', 'SKILL.md')).hookSpecificOutput?.permissionDecision, 'deny');
   assert.equal(edit(join(CORE, 'OIKOS.md')).hookSpecificOutput?.permissionDecision, 'deny', 'the core reached by its real path');
   assert.equal(edit('oikos/new-file.md').hookSpecificOutput?.permissionDecision, 'deny', 'a new file inside oikos/');
-  assert.deepEqual(edit(join(dir, 'oikos.yaml')), {});
+  const rename = { old_string: 'name: ACME Corp', new_string: 'name: ACME Inc' };
+  assert.deepEqual(hook(dir, 'package-guard', { hook_event_name: 'PreToolUse', tool_name: 'Edit', cwd: dir, tool_input: { file_path: join(dir, 'oikos.yaml'), ...rename } }), {}, 'oikos.yaml is editable except for its mounts: part (mounts.test.mjs)');
   assert.deepEqual(edit(join(dir, '.local', 'catalog.yaml')), {});
   // the core repository itself is where oikos is developed
   const inCore = spawnSync(process.execPath, [join(CORE, 'tools', 'hooks', 'host-hook.mjs'), 'package-guard'], {
