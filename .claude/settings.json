@@ -20,6 +20,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/model-routing.mjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/learning-reminder.mjs\""
           }
         ]
       }

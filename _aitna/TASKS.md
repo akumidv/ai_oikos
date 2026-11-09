@@ -41,9 +41,12 @@ run from an installation or with `OIKOS_HOME`.
 ## Phase 2 — akmon as the development layer
 
 - P2-2 · Two syncs coexist · active · `akmon sync --check`, `akmon verify --strict`, `npm run check` all green
-  — all green with no warning; skill owner moved to `metadata.owner`; everything akmon generates
-  is tracked; Codex hooks trusted; realigned to the mounted akmon, `profiles/js.md` imported,
-  `[check]` runs oxlint (akmon's rules, in `npm run check`), `[test].runner = "npm test"`. Left: the first CI run after the
+  — the pin and `_aitna/.akmon.toml` sit at the mounted `607648d`, realigned there: `profiles/js.md` imported,
+  `[check]` runs oxlint (akmon's rules, in `npm run check`), `[test].runner = "npm test"`; one charter per
+  agent (`development`, `learning`, `release` — the role directories merged into the development charter);
+  skill owner in `metadata.owner`; everything akmon generates is tracked. Left: re-approve the changed
+  `.codex/hooks.json` in Codex `/hooks` (its `learning-reminder` entry is new; `verify --strict` fails on
+  `codex.host-trust` until then, on a machine without Codex the check skips) and the first CI run after the
   push (P3-4).
 - P2-3 · Size rules from warn to error · active · Split the long functions oxlint's size rules warn about
   — `complexity` 10, `max-params` 5, `max-statements` 50, `max-depth` 4 warn in `.oxlintrc.json`
@@ -91,37 +94,8 @@ run from an installation or with `OIKOS_HOME`.
   report), tests green, live `project-init` / `repos add` dry-runs checked. Left: GitLab candidate search,
   a real write in an installation, commit.
 - T4 · Issues trackers by the same rules · deferred · `github-issues`, `gitlab-issues` after T1–T3 — ADR 0001 D07.
-- T5 · Epics across projects, bare numbers, batch moves · active · Round 2 from a sprint pass — ADR 0001 D09–D13
-  — [design](../docs/design/tracker-transitions.md) § Epics by role and across projects, § Bare task
-  numbers, § Leaving a found PR out, § Moving many tasks. Done in code, tests green: parent check in
-  `create`/`edit --parent`, overdue sprint warning, path hint, `transition --brief`; D09–D13
-  (`epic_roles`, `epic_projects`, `number_repos`, `number_patterns`, commit search, `--skip-pr`,
-  `transition --task A,B,…`, the `project-init`/`repos add` flags). Code audited (three rounds,
-  pass), audit fixes and the owner's D11–D13 rulings in; the parent rule checked live (team-managed
-  only refuses; company-managed projects hold cross-project parents). Last round in (partly searched
-  on a rate limit, collapsed per-commit notes, unread commits flag the search incomplete, D13
-  widened to "stopped part way" and unread commits), control audit pass with fixes. Follow-ups in,
-  audited (pass): the real run notes an incomplete re-collection on stderr, retry-after in
-  rate-limit notes (kept per host across a batch), reason before shas, 404s collapsed, one
-  "limited earlier" note per host. A rate limit is kept per quota across a batch for the pool and
-  extended search as for the commit search (GitHub GraphQL, REST search and REST core apart). Left: GitLab live; the installation's config moved to the new keys (by the owner, in the
-  installation); commit.
-- T6 · `jira move`: issues to another project · active · Bulk move by keys or JQL — preview, owner's yes, poll, old→new keys
-  — Jira Cloud `POST /rest/api/3/bulk/issues/move` + `GET /rest/api/3/bulk/queue/{taskId}` (public
-  v3 spec, "an early version … no full parity with the Bulk Move UI"; ≤1000 issues incl. subtasks;
-  one target project per request; epics and their children in separate requests, the children with
-  the epic as target parent; subtasks follow with `inferSubtaskTypeDefault`; failures per issue in
-  `failedAccessibleIssues`). Read-only probe on a live Cloud site: the bulk queue answers (404 "task
-  could not be found", not a missing route), Bulk change / Move / Create permissions held. No REST
-  move on Data Center. Step 1 (research) done; step 2 design shown to the owner. Open decisions:
-  D-T6-NAME (verb name: `move` or `move-to-project`, beside `move-to-sprint` and "move" = transition
-  in the skill), D-T6-CONFIRM (preview by default + `--yes`, which needs a write-guard change, or the
-  tools' `--dry-run` convention), D-T6-HIERARCHY (epic + children in two phases; a child whose epic
-  stays behind), D-T6-NOTIFY (`sendBulkNotification` off by default), D-T6-SANDBOX (throwaway
-  projects for the live check). Unconfirmed until the sandbox run: team-managed → company-managed
-  through the API, a parent kept for a non-subtask, sprint/version/component loss, JQL and
-  `GET /issue/<old key>` on an old key. Also: bare task numbers bound to a project (D11
-  `number_repos`) do not follow a moved key — the installation's config needs the new project.
+- T5 · Epics across projects, bare numbers, batch moves · active · Round 2 from a sprint pass — [ADR 0001](../docs/adr/0001-tracker-transitions.md) D09–D13 · [detail](tasks/T5-tracker-round-2.md)
+- T6 · `jira move`: issues to another project · active · Bulk move by keys or JQL — preview, owner's yes, poll, old→new keys · [detail](tasks/T6-jira-move.md)
 - L1 · `.local/` dot stores closed, the rest open · active · Guard by dot name, `.secrets/` `.browser/`, lazy migration
   — [ADR 0002](../docs/adr/0002-local-stores.md) D01–D04, [design](../docs/design/local-stores.md).
   Done in code (guard by name, `localStorePath` fallback, `moveLocalStores` in sync), tests green.
@@ -144,14 +118,14 @@ run from an installation or with `OIKOS_HOME`.
   — accepted gap (re-audit): the file matcher does not match `mcp__*`; no oikos guard is wired for Codex
   (`.codex/hooks.json` holds akmon's only); `cp`, `sed -i`, `python`, `node -e` writing into a mount, another
   installation or a closed file pass the shell guard (see L2, L3) — [ADR 0007](../docs/adr/0007-mounts.md) D02, D03, D05.
-  — accepted residuals (audit 4, 2026-11-04) of the shell judgement: loop variables (`for d in vault; do git -C $d …`),
+  — accepted residuals (audit 4) of the shell judgement: loop variables (`for d in vault; do git -C $d …`),
   `$(which git)` or `$G"t"` as the program, `eval cd …`, `cd "$(…)"`, a command that kills the hook dispatcher itself, `${VAR:-x}` defaults (`${TMPDIR:-/tmp}`), `tee`/`cp`/`mv`/`ln` into the hook state
   folder, git's own pathspec `*` crossing `/`, and `NODE_OPTIONS` already in the host's environment (node has no flag
   to ignore it; the settings route is closed by `env`); audit 5 (D-AUDIT5-CORE-LINK, D-AUDIT5-GIT-C): the shell
   replacing, moving or removing the `oikos/` core link (`ln`, `mv`, `rm`), shell writers over settings (`cp`,
   `sed -i`), and `git -c <key>=<value>` values that write (`core.pager=…`, L3); audit 6b (D-AUDIT6B-SHELL-MODEL, D-AUDIT6B-SHELL-SKILLS): a program written to a file and run (`sh f.sh`, `node f.mjs`) or fed to a shell through a pipe, `-s` or `<(…)`, and shell writes of skill, agent and command files — [ADR 0007](../docs/adr/0007-mounts.md) D02.
 - L6 · Guard: nested installations and the search above the installation · deferred · A folder holding another installation is found only by a shallow search
-  — accepted gap (owner, 2026-11-04): a folder that holds another installation but is not above this one is searched without that installation being detected beyond the nested-installation search (two levels, at most 100 folders; deeper nesting is not detected); `list_directory` of a parent folder lists names (it is not a search tool). A search scope above the installation is denied, with no exception for a mount — [ADR 0007](../docs/adr/0007-mounts.md) D01, D05; [design](../docs/design/mounts.md) D-S4-ANCESTOR.
+  — accepted gap (owner): a folder that holds another installation but is not above this one is searched without that installation being detected beyond the nested-installation search (two levels, at most 100 folders; deeper nesting is not detected); `list_directory` of a parent folder lists names (it is not a search tool). A search scope above the installation is denied, with no exception for a mount — [ADR 0007](../docs/adr/0007-mounts.md) D01, D05; [design](../docs/design/mounts.md) D-S4-ANCESTOR.
 - F8 · Extension rules from the installation · active · No app or block names in the core's extension
   — the owner's choice: `oikos.yaml` `browser_helpers` (per site: optional hosts, helpers with
   `hide`/`open` titles); `sync` builds the extension into `.local/extension/` (core code, a
@@ -187,11 +161,11 @@ run from an installation or with `OIKOS_HOME`.
 - A3 · Tool `desk` · active · `new`, `index`, `list`, `find`, `compact` (plan, `--yes`), `reopen`; layout `.local/desk/<date>/<topic>/`, retention 30/90 days; the `notes` scenario `compact`; the `desk:` part of `oikos.yaml`; `handoff list` skips `desk`
 - A4 · Review of a task's result · active · `task-tracking` scenario `review-result` and `messaging` scenario `thread-of-task` written; the `task-tracking` refusal and `move-task` now point to the review; the desk charter lists both; left: owner review and commit (attachments: `attachment` exists in the jira and issue connectors; F12 only adds uploads)
 - A5 · Review through a mounted outside project · blocked · After the mounts task; read/review from the root, writes in its own session
-- A6 · Fixes found in the first run · active · Greek letters no longer count as non-English — ADR 0003 D02 amended (owner, 2026-10-27), built in `nonLatinLetters` with a test, left: owner review and commit. People lookup (alias → account): [ADR 0006](../docs/adr/0006-desk-agent.md) D06 — `.local/private.yaml`, file first, then the connector's search, then add; tool `people`, git-ignored line forced by `setup init` and `sync`; building
+- A6 · Fixes found in the first run · active · Greek letters no longer count as non-English — ADR 0003 D02 amended (owner), built in `nonLatinLetters` with a test, left: owner review and commit. People lookup (alias → account): [ADR 0006](../docs/adr/0006-desk-agent.md) D06 — `.local/private.yaml`, file first, then the connector's search, then add; tool `people`, git-ignored line forced by `setup init` and `sync`; building
 - A7 · akmon: develop and deliver standing agents · active · Prompt in the design's appendix; the owner runs it in an akmon session
 - A8 · Context-pressure advice names the desk · active · The hook advises `park … .local/<task>/`; with the desk it advises a topic card first
 - A9 · Mounts in the core · active · Mounts give skills and notes, never rules; leaks guarded both ways
-  — [design](../docs/design/mounts.md); every `D-A9-*` decided (2026-10-28): shared + `.local/mounts.yaml` with the local entry winning,
+  — [design](../docs/design/mounts.md); every `D-A9-*` decided: shared + `.local/mounts.yaml` with the local entry winning,
   outside mounts, vault migrated, helper, leak check through `outgoingFindings`, `mention_assistant` per mount, `vault` derived from
   `use: wiki`, an installation writes only into itself (notes through `vault` only), `skills.only`. [ADR 0007](../docs/adr/0007-mounts.md)
   accepted, with both audits' fixes and decisions in. Built: S1, S2, S3 (committed), `setup mount
@@ -200,10 +174,10 @@ run from an installation or with `OIKOS_HOME`.
   A5, A11 and the desk's phase 3 wait on it
 - A10 · akmon in installations · active · Authoring agents and skills in an installation under akmon, attached softly for non-developers
   — [design](../docs/design/akmon-in-installations.md) drafted: the `guided` actor of akmon's actor work, the core's pinned akmon, oikos `sync`
-  as the one writer, on demand; every `D-A10-*` decided as recommended (2026-10-28); next: the owner runs the akmon prompt in the design's
+  as the one writer, on demand; every `D-A10-*` decided as recommended; next: the owner runs the akmon prompt in the design's
   appendix; waits on akmon's guided profile
 - A11 · Work and personal kept apart · active · No leak either way between an organization's installation and a personal one
-  — [design](../docs/design/mounts.md) § Linked installations; decided (2026-10-28): the root is the work repository, `.local/` never is
+  — [design](../docs/design/mounts.md) § Linked installations; decided: the root is the work repository, `.local/` never is
   and its stores stay; another installation is read only when registered as a mount (shared or `.local/`, local wins); the boundary guard
   always on; an installation changes only itself; data crosses only by `setup transfer`, run in the receiving installation, checked
   with both installations' terms, a finding refuses, text sources only ([ADR 0007](../docs/adr/0007-mounts.md) D05); every

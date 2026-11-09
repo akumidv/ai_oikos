@@ -25,6 +25,11 @@
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/_aitna/akmon/js/hooks/codex-hook.mjs\" session-start",
             "statusMessage": "Loading akmon session reminders"
+          },
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/_aitna/akmon/js/hooks/codex-hook.mjs\" learning-reminder",
+            "statusMessage": "Checking the learning-run reminder"
           }
         ]
       }

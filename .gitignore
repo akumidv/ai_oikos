@@ -27,3 +27,14 @@ _aitna/.venv/
 .claude/agents/k_*.md
 
 # Node dependencies
+
+# local layer (machine state), ergons, worktrees and scratch — never committed
+_aitna/.local/
+_aitna/.ergon/
+.worktrees/
+.tmp/
+
+.codex/second-opinion/
+.qwen/second-opinion/
+.opencode/second-opinion/
+.pi/second-opinion/

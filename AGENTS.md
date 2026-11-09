@@ -36,14 +36,15 @@ Model & notation: [`MODEL.md`](_aitna/akmon/MODEL.md); attach/realign guide:
 - **Archetype / language:** `package` / `javascript` — classify per
   [`ARCHETYPES.md`](_aitna/akmon/ARCHETYPES.md), then update this line, the guardrail imports
   below, and `attached_archetype` in `_aitna/.akmon.toml`.
-- **Layers:** SHARED = `_aitna/akmon/` · LOCAL = `_aitna/{agents,skills,tools,memory}` +
+- **Layers:** SHARED = `_aitna/akmon/` · LOCAL = `_aitna/{agents,skills,tools,memory,tasks}` +
   [`_aitna/TASKS.md`](_aitna/TASKS.md) · USAGE = root `skills/` (oikos's skills,
   which an installation loads through `oikos/`).
-- **Agents (roles):** [review](_aitna/agents/review/README.md),
-  [architect](_aitna/agents/architect/README.md), [engineer](_aitna/agents/engineer/README.md)
-  → roles: [`_aitna/akmon/roles/`](_aitna/akmon/roles/).
-  **Declare the active agent** before doing work and restate it on switch
-  (`🧭 agent: <name> — <focus>`).
+- **Agents:** the [development](_aitna/agents/development/README.md) charter — its roles are
+  review, architect and engineer → roles: [`_aitna/akmon/roles/`](_aitna/akmon/roles/) — and the
+  [learning](_aitna/agents/learning/README.md) and
+  [release](_aitna/agents/release/README.md) charters, one per agent.
+  **Declare the active role** before doing work and restate it on switch
+  (`🧭 role: <name> — <focus>`).
 - **Delegation (always-on, direct):** **delegation is the default.** For every non-trivial
   task, before the first repository sweep, edit, or test run, decompose the work and delegate
   every independent mechanical sub-step to available subagents without waiting for an owner
@@ -71,6 +72,12 @@ Model & notation: [`MODEL.md`](_aitna/akmon/MODEL.md); attach/realign guide:
   [tasks](_aitna/akmon/pipelines/tasks.md) (backlog format), and the learn loop
   ([memory-distill](_aitna/akmon/pipelines/memory-distill.md) +
   [learning](_aitna/akmon/pipelines/learning.md)).
+- **The method's words:** work is tracked in `_aitna/.ergon/`: an *ergon* is a piece of work (what a
+  user may call an epic, a kit or a work package); an *athlos* is a bounded unit of it (a job); a *step*
+  is one line of an athlos, checked off when done; to *park* an athlos is to stop it for another session
+  (a handoff, a checkpoint). A *task* is a backlog row an ergon serves; a user who says "task" may mean
+  an ergon or an athlos, so read which from the id. The format of a note or a plan line
+  and its place stay with the code.
 - **Memory:** read `_aitna/memory/` at session start — distilled project facts, indexed by
   [`_aitna/memory/README.md`](_aitna/memory/README.md).
 - **Backlog:** [`_aitna/TASKS.md`](_aitna/TASKS.md) — one line per task, detail by reference;
