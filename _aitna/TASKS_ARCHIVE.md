@@ -40,3 +40,9 @@ Finished entries moved out of [`TASKS.md`](TASKS.md), same one-line format.
   → environment; missing credentials are an error; no git-email fallback without a domain; a
   connector's tool runs only where `connectors:` lists it, and nothing listed means none
   (landscape, `setup`, session-start). Tokens may stay exported in the shell profile.
+- F19 · Footprint extension 3: events, slices, sessions, meaning, releases, team · done · One collector of digital traces
+  — [ADR 0008](../docs/adr/0008-footprint-events.md) accepted 2026-11-14, [design](../docs/design/footprint.md):
+  store + `slice`, source `sessions` (Claude, Qwen, Codex; forwarded side-agent notes), git meaning and decision
+  documents, releases, issues closed, uncommitted, first activity, source `team`, decision chain. Accepted against the
+  installation's prototype in three runs; carried to main 2026-11-14. The installation's switch of its CV skill to the
+  core commands is the installation's own task.

@@ -138,11 +138,6 @@ run from an installation or with `OIKOS_HOME`.
   [skills/footprint/](../skills/footprint/SKILL.md) (scenarios `period-report`, `against-hours`),
   tool `tools/footprint/cli.mjs` (`sources`, `identify`, `collect`), the `cv` scenario
   [own-cv](../skills/cv/scenarios/own-cv.md), group `hr`.
-- F19 · Footprint extension 3: events, slices, sessions, meaning, releases, team · active · One collector of digital traces
-  — [ADR 0008](../docs/adr/0008-footprint-events.md) proposed (shape chosen by the owner 2026-11-14), [design](../docs/design/footprint.md):
-  store + `slice`, source `sessions` (Claude, Qwen, Codex), git meaning and decision documents, releases, issues closed,
-  uncommitted, first activity, source `team`, decision chain; acceptance against the installation's prototype; then the
-  installation's CV skill points at the core commands.
 - F10 · Write guard: false positives, direct HTTP writes · active · Reads by script position pass; `curl`/`wget`/`gh api` writes denied — done in code, tests green; left: commit.
 - F11 · Jira compact dry runs, `search --count` · active · Long texts as size, outline, diff; `--full`; approximate count — done in code, tests green; left: commit.
 - F12 · `jira attach` · active · Upload files through `localFile`, read back by id (F2's attach half) — done in code, tests green; left: commit.
