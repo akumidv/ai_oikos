@@ -52,7 +52,7 @@ import { config } from '../common/config.mjs';
 import { moveBrowserParts, moveLocalStores } from '../common/local-stores.mjs';
 import { outgoingRules } from '../common/outgoing.mjs';
 import { PEOPLE_IGNORE_COMMENT, PEOPLE_IGNORE_LINE } from '../common/people.mjs';
-import { chromeRunning } from '../browser/running.mjs';
+import { buildRunning, chromeRunning } from '../browser/running.mjs';
 import { WRITES } from '../hooks/writes.mjs';
 import { goneRoots, namesRoot, wireMounts } from './mounts.mjs';
 import { MARKER, isOurs, pointer, mountPointers } from './pointers.mjs';
@@ -313,13 +313,15 @@ if (INSTALL) {
   // Whether the Chrome runs is asked once for both moves: the store itself, then what akmon names differently in it.
   let running;
   const browserRunning = () => (running ??= chromeRunning());
-  const moves = [...await moveLocalStores(INSTALL, { check: readOnly, browserRunning }), ...await moveBrowserParts(INSTALL, { check: readOnly, browserRunning })];
+  const moves = [...await moveLocalStores(INSTALL, { check: readOnly, browserRunning }), ...await moveBrowserParts(INSTALL, { check: readOnly, browserRunning, buildInUse: buildRunning })];
   for (const m of moves) {
     const move = `${m.from} → ${m.to}`;
     if (m.state === 'moved' || m.state === 'out of date') changed.push(move);
     // A failed move is a problem: the rest of sync runs, and it exits 1 like on any other problem.
     else if (m.state === 'failed') problems.push(`${move} not moved (${m.error}); it is still used where it is`);
     else if (m.state === 'running') console.log(`note: ${move} not moved — this installation's Chrome is running; stop it (node oikos/tools/browser/cli.mjs stop) and sync again`);
+    else if (m.state === 'in use') console.log(`note: ${move} not moved — a process runs from ${m.from} (likely another installation's Chrome); stop it and sync again`);
+    else if (m.shared) console.log(`note: ${m.from} and ${m.to} both exist; ${m.to} is the one akmon uses, and ${m.from} is left as it is — other installations may use it, check before you clean up`);
     else console.log(`note: ${m.from} left in place — ${m.to} exists too and is the one used; remove ${m.from} once nothing in it is needed`);
   }
 }

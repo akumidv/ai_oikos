@@ -33,7 +33,7 @@ export function requireTool(file) {
     + 'or the akmon pin predates the browser tool (update oikos, then the submodule)');
 }
 
-/** The oikos settings that stand for an akmon one; an `AKMON_*` variable that is already set wins. */
+/** The oikos settings that stand for an akmon one; the oikos setting wins, an `AKMON_*` variable is kept only without it. */
 export const ENV_ALIASES = Object.freeze({
   OIKOS_CHROME_PATH: 'AKMON_BROWSER_CHROME',
   OIKOS_CHROME_PROFILE: 'AKMON_BROWSER_PROFILE',
@@ -45,7 +45,10 @@ export const ENV_ALIASES = Object.freeze({
  * The environment akmon's browser tool runs in for the installation at `root`: `env` with
  * `AKMON_BROWSER_ROOT` set to the installation — always, so a stray value in the shell never points the
  * tool at another project's browser — and each `OIKOS_CHROME_*` setting that `read` gives, under its
- * akmon name, unless that name is set in `env` already. Pure: the caller passes what it read.
+ * akmon name, over an `AKMON_BROWSER_*` value of `env` (the project's setting first, so a value left in
+ * the shell for another project never overrides the installation's). Where oikos has no setting, the
+ * `AKMON_BROWSER_*` value of `env` stays; where neither is set nothing is passed and akmon's default
+ * applies. Pure: the caller passes what it read.
  * @param {string} root the installation's folder
  * @param {{read?: (name: string) => string|undefined, env?: Record<string, string|undefined>}} [from]
  *   `read` looks a setting up (envValue: `.local/.env`, `oikos.yaml` settings, the environment)
@@ -54,7 +57,6 @@ export const ENV_ALIASES = Object.freeze({
 export function akmonBrowserEnv(root, { read = envValue, env = process.env } = {}) {
   const mapped = { ...env, AKMON_BROWSER_ROOT: root };
   for (const [from, to] of Object.entries(ENV_ALIASES)) {
-    if (env[to]) continue;
     const value = read(from);
     if (value) mapped[to] = String(value);
   }
@@ -85,12 +87,20 @@ export function runTool(script, args, env, spawn = nodeSpawn) {
 }
 
 /**
- * The DevTools port akmon's tool uses for the installation at `dir` when `OIKOS_CHROME_PORT` is not
- * set — the formula is akmon's (9300 + sha1 of the real path), so the two agree.
+ * The DevTools port akmon's tool uses for the installation at `dir` when neither `OIKOS_CHROME_PORT`
+ * nor `AKMON_BROWSER_PORT` is set — the formula is akmon's (9300 + sha1 of the real path), so the two agree.
  */
 export function defaultPort(dir) {
   return 9300 + (createHash('sha1').update(realOf(dir)).digest().readUInt16BE(0) % 600);
 }
 
-/** This installation's DevTools port: OIKOS_CHROME_PORT (oikos.yaml settings), else defaultPort(). */
-export const browserPort = () => Number(envValue('OIKOS_CHROME_PORT') || defaultPort(installPath()));
+/**
+ * The DevTools port of the installation at `root`, from the environment its tool gets (`mapped`,
+ * akmonBrowserEnv — OIKOS_CHROME_PORT, else AKMON_BROWSER_PORT), else defaultPort(): the one port
+ * akmon's tool and oikos's running check agree on.
+ * @param {string} [root] the installation's folder
+ * @param {Record<string, string|undefined>} [mapped] akmonBrowserEnv(root)
+ * @returns {number}
+ */
+export const browserPort = (root = installPath(), mapped = akmonBrowserEnv(root)) =>
+  Number(mapped.AKMON_BROWSER_PORT || defaultPort(root));

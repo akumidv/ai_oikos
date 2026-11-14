@@ -68,9 +68,14 @@ built — not what the skill promises the user.
   environment with a pure function: `AKMON_BROWSER_ROOT` as D02, and `OIKOS_CHROME_PATH` →
   `AKMON_BROWSER_CHROME`, `OIKOS_CHROME_PROFILE` → `AKMON_BROWSER_PROFILE`, `OIKOS_CHROME_PORT` →
   `AKMON_BROWSER_PORT`, `OIKOS_CHROME_PROXY` → `AKMON_BROWSER_PROXY`. The oikos value is read the way
-  oikos reads every setting (`.local/.env`, then `oikos.yaml` `settings`, then the shell); an
-  `AKMON_BROWSER_*` variable that is already set wins. The aliases are temporary: they go when the
-  installations have moved to the akmon names (backlog C2).
+  oikos reads every setting (`.local/.env`, then `oikos.yaml` `settings`, then the shell). Per
+  setting the precedence is: (1) the oikos setting; (2) if oikos has none, an `AKMON_BROWSER_*`
+  variable already in the environment; (3) if neither, nothing is passed and akmon's default applies
+  (port from the formula on the installation root, profile under `.local/.browser`). The aliases are
+  temporary: they go when the installations have moved to the akmon names (backlog C2).
+  *Amended 2026-11-14 by the owner (D-BROWSER-ENV-PRECEDENCE): the project's setting first — an
+  `AKMON_BROWSER_*` variable used to win; a value left in the shell for another project must not
+  override the installation's, the same reason as D02.*
 - **Rationale.** Users already set `OIKOS_CHROME_PORT` in `oikos.yaml` (written by `setup init`) and the
   other three; the mapping keeps those working without a flag day, and reads them where oikos already
   reads settings, never deep in the tool.
@@ -136,7 +141,7 @@ built — not what the skill promises the user.
 - **Rationale.** The browser is the user's signed-in session; the page, the sign-in and each confirmed
   step belong to the session the user talks to. A prose rule in the skill does not stop a subagent.
 - **Known limit.** Delegation is recognised by `agent_id`, which Claude Code sends on a subagent's every
-  tool event; a host that does not send it (Qwen Code, unverified) shows every call as the developer's own.
+  tool event; a host that does not send it (Qwen Code, unverified) shows every call as the developer's own. Codex gets no oikos hooks at all (oikos wires hooks for Claude and Qwen only), so the drive guard does not apply there.
   A deliberate evasion through another interpreter's inline code (`node -e`, `echo … | bash`) is not read,
   as in akmon. The dispatcher's fallback rules do not cover this guard: a guard that cannot run lets the call
   through with the usual "hook failed" notice.

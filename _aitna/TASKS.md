@@ -202,4 +202,4 @@ run from an installation or with `OIKOS_HOME`.
 
 ## Browser
 
-- C2 · Browser from akmon: re-pin after its release · active · Re-pin akmon after its release; drop the `OIKOS_CHROME_*` aliases · [ADR 0009](../docs/adr/0009-browser-from-akmon.md)
+- C2 · Browser from akmon: re-pin after its release · active · Re-pin akmon after its release; drop the `OIKOS_CHROME_*` aliases; akmon `status` should recognise oikos's launcher as wired (it says "not wired" today) · [ADR 0009](../docs/adr/0009-browser-from-akmon.md)

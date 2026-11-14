@@ -2,7 +2,7 @@
 // Launcher of the `akmon-browser` MCP server (.mcp.json, written by `oikos sync`). It runs akmon's
 // launcher (`<core>/_aitna/akmon/js/tools/browser/mcp.mjs`, ADR 0009) for this installation: the same
 // environment as the CLI (akmon.mjs: AKMON_BROWSER_ROOT = the installation, the OIKOS_CHROME_*
-// settings under their akmon names), stdio passed straight through, so the server speaks to the host
+// settings under their akmon names, winning over an AKMON_BROWSER_* variable), stdio passed straight through, so the server speaks to the host
 // as before. akmon's launcher refuses a Chrome that does not run with this project's profile, and
 // answers the host's `initialize` with the reason. The installation comes from OIKOS_HOME, which sync
 // writes into .mcp.json next to this command.

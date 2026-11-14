@@ -15,11 +15,13 @@ import { PROJECT_PROGRAMS } from './programs.mjs';
  * @property {string} store a key of LOCAL_STORES
  * @property {string} from the legacy place, relative to the installation (`.local/google`)
  * @property {string} to the place, relative to the installation (`.local/.secrets/google`)
- * @property {'moved'|'out of date'|'running'|'both'|'failed'} state `moved` now; `out of date`
+ * @property {'moved'|'out of date'|'running'|'in use'|'both'|'failed'} state `moved` now; `out of date`
  *   under a check, which moves nothing; `running` — the browser's Chrome runs, so it was left;
- *   `both` — the new place exists too, so the old one was left for the user to look at; `failed` —
- *   the move threw, the store stays where it was
+ *   `in use` — a process runs from the shared Chrome build, so it was left; `both` — the new place
+ *   exists too, so the old one was left for the user to look at; `failed` — the move threw, the store
+ *   stays where it was
  * @property {string} [error] for `failed`: the error's code and message
+ * @property {true} [shared] a Chrome build in the core's cache, which other installations use too
  */
 
 /**
@@ -56,16 +58,37 @@ export async function moveLocalStores(root, { check = false, browserRunning = as
   return moves;
 }
 
-/** Move `from` to `to` (a folder), across file systems too; never overwrites. */
-function moveFolder(from, to) {
+/** The file system calls {@link moveFolder} makes, replaceable in tests. */
+const FILE_SYSTEM = Object.freeze({ renameSync, cpSync, rmSync });
+
+/**
+ * Move `from` to `to` (a folder), across file systems too; never overwrites. Across volumes the folder
+ * is copied into a sibling `<to>.partial-<pid>` (symbolic links as they are — a macOS `.app` bundle holds
+ * relative ones), renamed to `to` only when the copy is whole, and only then is `from` removed; a copy
+ * that fails is removed and the error rethrown, so `to` is never half of a folder.
+ */
+function moveFolder(from, to, fs = FILE_SYSTEM) {
   mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
   try {
-    renameSync(from, to);
+    fs.renameSync(from, to);
+    return;
   } catch (e) {
     // The core and the installation on different volumes: copy, then remove.
     if (e.code !== 'EXDEV') throw e;
-    cpSync(from, to, { recursive: true, errorOnExist: true, force: false });
-    rmSync(from, { recursive: true });
+  }
+  const partial = `${to}.partial-${process.pid}`;
+  try {
+    fs.rmSync(partial, { recursive: true, force: true }); // left by a run whose pid this one has
+    fs.cpSync(from, partial, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+    fs.renameSync(partial, to);
+  } catch (e) {
+    try { fs.rmSync(partial, { recursive: true, force: true }); } catch { /* the cause below is the one to report */ }
+    throw e;
+  }
+  try {
+    fs.rmSync(from, { recursive: true });
+  } catch (e) {
+    throw new Error(`copied to ${to}, but ${from} could not be removed: ${e.message}`, { cause: e });
   }
 }
 
@@ -82,15 +105,18 @@ function moveFolder(from, to) {
  * the `from` of a Chrome is relative to the core's parent (`oikos/node_modules/…`).
  *
  * @param {string} root the installation's folder
- * @param {{ check?: boolean, browserRunning?: () => Promise<boolean>, cache?: string }} [options]
- *   `cache` is the folder oikos's Chrome for Testing builds are in (for tests)
+ * @param {{ check?: boolean, browserRunning?: () => Promise<boolean>, buildInUse?: (build: string) => Promise<boolean>|boolean, cache?: string, fs?: typeof FILE_SYSTEM }} [options]
+ *   `buildInUse` says whether a process runs from the Chrome build folder given (browser/running.mjs
+ *   buildRunning) — another installation's Chrome may run from the shared cache; it is asked only for a
+ *   build about to move, and one that cannot be told counts as in use. `cache` is the folder oikos's
+ *   Chrome for Testing builds are in, and `fs` the calls that move a folder (both for tests).
  * @returns {Promise<StoreMove[]>}
  */
-export async function moveBrowserParts(root, { check = false, browserRunning = async () => true, cache = join(PROJECT_PROGRAMS, 'chrome') } = {}) {
+export async function moveBrowserParts(root, { check = false, browserRunning = async () => true, buildInUse = async () => false, cache = join(PROJECT_PROGRAMS, 'chrome'), fs = FILE_SYSTEM } = {}) {
   const moves = [];
   let running;
-  for (const { from, to, shown: [shownFrom, shownTo] } of browserMoves(root, cache)) {
-    const entry = { store: 'browser', from: shownFrom, to: shownTo };
+  for (const { from, to, shared, shown: [shownFrom, shownTo] } of browserMoves(root, cache)) {
+    const entry = { store: 'browser', from: shownFrom, to: shownTo, ...(shared ? { shared } : {}) };
     if (existsSync(to)) {
       moves.push({ ...entry, state: 'both' });
     } else if (check) {
@@ -98,11 +124,15 @@ export async function moveBrowserParts(root, { check = false, browserRunning = a
     } else if (await (running ??= Promise.resolve().then(browserRunning).catch(() => true))) {
       // Asked once, and only when something is to move; a check that cannot be made counts as running.
       moves.push({ ...entry, state: 'running' });
+    } else if (shared && await Promise.resolve(from).then(buildInUse).catch(() => true)) {
+      moves.push({ ...entry, state: 'in use' });
     } else {
       try {
-        moveFolder(from, to);
+        moveFolder(from, to, fs);
         moves.push({ ...entry, state: 'moved' });
       } catch (e) {
+        // The source is gone: another sync (of another installation, for the shared cache) moved it first.
+        if (e.code === 'ENOENT' && !existsSync(from)) continue;
         moves.push({ ...entry, state: 'failed', error: `${e.code ? `${e.code}: ` : ''}${e.message}` });
       }
     }
@@ -110,7 +140,10 @@ export async function moveBrowserParts(root, { check = false, browserRunning = a
   return moves;
 }
 
-/** What {@link moveBrowserParts} would move for the installation at `root`: `{ from, to, shown: [from, to] }` as labelled in a report. */
+/**
+ * What {@link moveBrowserParts} would move for the installation at `root`: `{ from, to, shown: [from, to] }`
+ * as labelled in a report, and `shared: true` for a build in the core's cache, which other installations use.
+ */
 function browserMoves(root, cache) {
   const store = join(root, '.local', ...LOCAL_STORES.browser.parts);
   const label = (path) => relative(root, path);
@@ -123,7 +156,7 @@ function browserMoves(root, cache) {
   const builds = existsSync(cache) ? readdirSync(cache, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort() : [];
   for (const build of builds) {
     const to = join(store, 'chrome', 'chrome', build);
-    wanted.push({ from: join(cache, build), to, shown: [join('oikos', relative(CORE_ROOT, join(cache, build))), label(to)] });
+    wanted.push({ from: join(cache, build), to, shared: true, shown: [join('oikos', relative(CORE_ROOT, join(cache, build))), label(to)] });
   }
   return wanted;
 }

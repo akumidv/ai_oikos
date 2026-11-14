@@ -8,15 +8,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { basename, join } from 'node:path';
 import { CORE_ROOT } from '../tools/common/paths.mjs';
 import { UsageError } from '../tools/common/cli.mjs';
-import { ENV_ALIASES, akmonBrowserEnv, akmonTools, defaultPort, requireTool, runTool } from '../tools/browser/akmon.mjs';
+import { ENV_ALIASES, akmonBrowserEnv, akmonTools, browserPort, defaultPort, requireTool, runTool } from '../tools/browser/akmon.mjs';
 import { browser } from '../tools/browser/cli.mjs';
 import { launch } from '../tools/browser/mcp.mjs';
-import { checkPort, chromeOwnership, profileInstallation } from '../tools/browser/running.mjs';
+import { buildRunning, checkPort, chromeOwnership, chromeRunning, profileInstallation } from '../tools/browser/running.mjs';
 import { moveBrowserParts } from '../tools/common/local-stores.mjs';
 import { migrateSeededRules } from '../tools/hooks/wiring.mjs';
 import { CORE, cleanEnv, installation, tempDir, tool } from './helpers/installation.mjs';
@@ -46,13 +46,17 @@ test('a setting that is not set is not passed on; the environment given is not c
   assert.equal(akmonBrowserEnv(ROOT, { read: () => '', env: {} }).AKMON_BROWSER_PORT, undefined, 'an empty value is not a setting');
 });
 
-test('an AKMON_BROWSER_* variable already set wins, except the root, which is always the installation', () => {
+test('the oikos setting wins over an AKMON_BROWSER_* variable; the variable is kept only without it; the root is always the installation', () => {
   const env = akmonBrowserEnv(ROOT, {
-    read: (name) => `from-oikos-${name}`,
-    env: { AKMON_BROWSER_PORT: '9500', AKMON_BROWSER_ROOT: '/another/project' },
+    read: (name) => (name === 'OIKOS_CHROME_PORT' || name === 'OIKOS_CHROME_PATH' ? `from-oikos-${name}` : undefined),
+    env: {
+      AKMON_BROWSER_PORT: '9500', AKMON_BROWSER_PROFILE: '/from/shell', AKMON_BROWSER_ROOT: '/another/project',
+    },
   });
-  assert.equal(env.AKMON_BROWSER_PORT, '9500');
+  assert.equal(env.AKMON_BROWSER_PORT, 'from-oikos-OIKOS_CHROME_PORT', 'oikos over the shell');
   assert.equal(env.AKMON_BROWSER_CHROME, 'from-oikos-OIKOS_CHROME_PATH');
+  assert.equal(env.AKMON_BROWSER_PROFILE, '/from/shell', 'no oikos setting: the variable stays');
+  assert.ok(!('AKMON_BROWSER_PROXY' in env), 'neither: nothing is passed, akmon\'s default applies');
   assert.equal(env.AKMON_BROWSER_ROOT, ROOT, 'a stray root never points the tool at another project');
 });
 
@@ -221,6 +225,22 @@ test('the port check: nothing answering, then the ownership of what answers', as
   assert.deepEqual(await checkPort(9312, { probe: async () => version, owner: () => owner }), { version, owner });
 });
 
+test('the running check probes the port akmon\'s tool gets: oikos setting, else AKMON_BROWSER_PORT, else the formula', async () => {
+  const none = () => undefined;
+  const mapped = (read, env) => akmonBrowserEnv(ROOT, { read, env });
+  assert.equal(browserPort(ROOT, mapped(none, { AKMON_BROWSER_PORT: '9477' })), 9477);
+  assert.equal(browserPort(ROOT, mapped((name) => (name === 'OIKOS_CHROME_PORT' ? '9411' : undefined), { AKMON_BROWSER_PORT: '9477' })), 9411);
+  assert.equal(browserPort(ROOT, mapped(none, {})), defaultPort(ROOT));
+
+  const probed = [];
+  const check = async (p) => { probed.push(p); return null; };
+  const running = await chromeRunning({
+    root: ROOT, browserEnv: mapped(none, { AKMON_BROWSER_PORT: '9477' }), launches: [], check, profileInUse: () => false,
+  });
+  assert.equal(running, false);
+  assert.deepEqual(probed, [9477], 'the shell port, with no oikos setting, is the one probed');
+});
+
 // -- the migration of the wiring ----------------------------------------------------------------
 
 const LEGACY_READS = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'].map((t) => `mcp__chrome-devtools__${t}`);
@@ -370,4 +390,118 @@ test('nothing moves while Chrome runs, under a check nothing moves and Chrome is
   assert.deepEqual(states(both), [['chrome-profile-project', 'both'], ['linux-140.0.1', 'moved'], ['linux-141.0.2', 'moved']]);
   assert.equal(readFileSync(join(taken.store, 'chrome-profile-cft', 'mine'), 'utf8'), 'kept');
   assert.ok(existsSync(join(taken.store, 'chrome-profile-project', 'Default', 'Cookies')), 'the old profile is left for the user to look at');
+});
+
+// -- a move that does not finish, runs twice, or runs from under a Chrome ------------------------------
+
+const noMove = async () => false;
+const exdev = () => Object.assign(new Error('cross-device link not permitted'), { code: 'EXDEV' });
+
+/** The file system calls of a move across volumes: a rename of `across` (a path) fails with EXDEV, the rest is real. */
+function acrossVolumes(across, { copy = cpSync } = {}) {
+  return { renameSync: (from, to) => { if (from === across) throw exdev(); return renameSync(from, to); }, cpSync: copy, rmSync };
+}
+
+test('a move across volumes copies into a temporary sibling and renames it, so a failed copy leaves no target and the source whole', async () => {
+  const { root, store, cache } = storeWith({ profile: 'chrome-profile-cft', builds: ['linux-140.0.1'] });
+  const source = join(cache, 'linux-140.0.1');
+  writeFileSync(join(source, 'chrome-linux64', 'second'), 'more');
+  let copied = 0;
+  const failing = acrossVolumes(source, { copy: (from, to, options) => cpSync(from, to, { ...options, filter: () => { if (++copied > 2) throw new Error('disk full'); return true; } }) });
+  const out = await moveBrowserParts(root, { browserRunning: noMove, cache, fs: failing });
+  assert.deepEqual(states(out), [['linux-140.0.1', 'failed']]);
+  assert.match(out[0].error, /disk full/);
+  assert.ok(!existsSync(join(store, 'chrome', 'chrome', 'linux-140.0.1')), 'no half-copied target');
+  assert.deepEqual(readdirSync(join(store, 'chrome', 'chrome')), [], 'the temporary copy is gone');
+  assert.equal(readFileSync(join(source, 'chrome-linux64', 'chrome'), 'utf8'), 'binary', 'the source is whole');
+  assert.deepEqual(states(await moveBrowserParts(root, { check: true, browserRunning: noMove, cache })), [['linux-140.0.1', 'out of date']], 'the next run moves it, not reports both');
+});
+
+test('a move across volumes keeps a relative symbolic link relative, and removes the source after the rename', async () => {
+  const { root, store, cache } = storeWith({ profile: 'chrome-profile-cft', builds: ['mac-140.0.1'] });
+  const source = join(cache, 'mac-140.0.1');
+  symlinkSync('chrome-linux64/chrome', join(source, 'Current'));
+  const out = await moveBrowserParts(root, { browserRunning: noMove, cache, fs: acrossVolumes(source) });
+  assert.deepEqual(states(out), [['mac-140.0.1', 'moved']]);
+  const target = join(store, 'chrome', 'chrome', 'mac-140.0.1');
+  assert.equal(readlinkSync(join(target, 'Current')), 'chrome-linux64/chrome');
+  assert.equal(readFileSync(join(target, 'Current'), 'utf8'), 'binary', 'it resolves inside the target, not into the removed source');
+  assert.ok(!existsSync(source));
+  assert.deepEqual(readdirSync(join(store, 'chrome', 'chrome')), ['mac-140.0.1']);
+});
+
+test('a source another sync moved first is nothing to move, not a failure', async () => {
+  const { root, cache } = storeWith({ profile: 'chrome-profile-cft', builds: ['linux-140.0.1', 'linux-141.0.2'] });
+  const vanishing = { renameSync: (from, to) => { rmSync(from, { recursive: true }); return renameSync(from, to); }, cpSync, rmSync };
+  assert.deepEqual(await moveBrowserParts(root, { browserRunning: noMove, cache, fs: vanishing }), [], 'both builds vanished before they moved: nothing reported');
+  const taken = storeWith({ profile: 'chrome-profile-cft', builds: ['linux-140.0.1'] });
+  const denied = { renameSync: () => { throw Object.assign(new Error('permission denied'), { code: 'EACCES' }); }, cpSync, rmSync };
+  assert.deepEqual(states(await moveBrowserParts(taken.root, { browserRunning: noMove, cache: taken.cache, fs: denied })), [['linux-140.0.1', 'failed']]);
+});
+
+test('a build a process runs from is left in the shared cache, with its own state; the profile and other builds move', async () => {
+  const { root, store, cache } = storeWith();
+  const asked = [];
+  const buildInUse = (build) => { asked.push(basename(build)); return build.endsWith('linux-140.0.1'); };
+  const out = await moveBrowserParts(root, { browserRunning: noMove, cache, buildInUse });
+  assert.deepEqual(states(out), [['chrome-profile-project', 'moved'], ['linux-140.0.1', 'in use'], ['linux-141.0.2', 'moved']]);
+  assert.deepEqual(asked, ['linux-140.0.1', 'linux-141.0.2'], 'asked for builds only, not for the profile');
+  assert.ok(existsSync(join(cache, 'linux-140.0.1')));
+  assert.ok(!existsSync(join(store, 'chrome', 'chrome', 'linux-140.0.1')));
+  const unknown = await moveBrowserParts(storeWith({ profile: 'chrome-profile-cft', builds: ['linux-140.0.1'] }).root,
+    { browserRunning: noMove, cache, buildInUse: () => { throw new Error('no process table'); } });
+  assert.equal(unknown[0].state, 'in use', 'a check that cannot be made counts as in use');
+});
+
+test('a build in the shared cache is marked shared, a profile is not', async () => {
+  const { root, cache } = storeWith();
+  const out = await moveBrowserParts(root, { check: true, cache });
+  assert.deepEqual(out.map((m) => m.shared ?? false), [false, true, true]);
+});
+
+test('buildRunning: a process whose executable is under the build folder, or a process table that could not be read', () => {
+  const found = (lines, complete = true) => (keep) => ({ lines: lines.filter((l) => keep(l, l.split(' '))), complete });
+  const build = '/core/cache/chrome/linux-140.0.1';
+  assert.equal(buildRunning(build, { processes: found([`${build}/chrome-linux64/chrome --no-first-run`]) }), true);
+  assert.equal(buildRunning(`${build}/`, { processes: found([`${build}/chrome-linux64/chrome`]) }), true, 'a trailing slash does not matter');
+  assert.equal(buildRunning(build, { processes: found([`${build}-other/chrome`, '/usr/bin/chrome']) }), false, 'a sibling folder with the same prefix is another build');
+  assert.equal(buildRunning(build, { processes: found([], false) }), true);
+  if (process.platform !== 'linux') return;
+  const dir = tempDir('build-');
+  symlinkSync(process.execPath, join(dir, 'chrome'));
+  const child = spawn(join(dir, 'chrome'), ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+  try {
+    assert.equal(buildRunning(dir), true, 'the real process table shows it');
+  } finally {
+    child.kill();
+  }
+  assert.equal(buildRunning(tempDir('build-')), false);
+});
+
+test('the command refuses a verb that may start Chrome while the browser state is not migrated; status, stop and help pass', async () => {
+  const fake = fakeTool();
+  const given = (pending) => ({ tools: { browser: fake.file }, root: ROOT, read: () => undefined, env: { FAKE_OUT: fake.out }, pending });
+  const asked = [];
+  const outOfDate = async (root) => { asked.push(root); return true; };
+  for (const verb of ['start', 'restart', 'attach']) {
+    await assert.rejects(browser([verb], given(outOfDate)),
+      (e) => e instanceof UsageError && /the browser state is not migrated yet: run `node oikos\/tools\/sync\/cli\.mjs` first/.test(e.message));
+    assert.ok(!existsSync(fake.out), 'akmon was not run');
+  }
+  assert.deepEqual(asked, [ROOT, ROOT, ROOT]);
+  for (const verb of ['status', 'stop', '--help', 'help']) assert.equal(await browser([verb], given(outOfDate)), 0, verb);
+  assert.equal(asked.length, 3, 'the check is not even made for them');
+  assert.equal(await browser(['start'], given(async () => false)), 0, 'migrated: passed on');
+  assert.deepEqual(readJson(fake.out).args, ['start']);
+});
+
+test('the migration check sees an old place of the store, and a profile not yet renamed', async () => {
+  const fake = fakeTool();
+  const old = tempDir('install-');
+  mkdirSync(join(old, '.local', 'browser', 'chrome-profile'), { recursive: true });
+  const base = { tools: { browser: fake.file }, read: () => undefined, env: { FAKE_OUT: fake.out } };
+  await assert.rejects(browser(['start'], { ...base, root: old }), (e) => e instanceof UsageError && /not migrated yet/.test(e.message));
+  const renamed = storeWith();
+  await assert.rejects(browser(['start'], { ...base, root: renamed.root }), (e) => e instanceof UsageError && /not migrated yet/.test(e.message));
+  assert.equal(await browser(['start'], { ...base, root: tempDir('fresh-') }), 0, 'nothing to migrate: passed on');
 });

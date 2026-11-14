@@ -8,10 +8,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { platform } from 'node:os';
 import { basename, join } from 'node:path';
-import { envValue, isWsl } from '../common/env.mjs';
+import { isWsl } from '../common/env.mjs';
 import { installPath, installRoot, LOCAL_STORES } from '../common/paths.mjs';
 import { windowsSide } from '../common/programs.mjs';
-import { browserPort } from './akmon.mjs';
+import { akmonBrowserEnv, browserPort } from './akmon.mjs';
 
 /** The profile folders of the browser store: the system Chrome's, the Chrome for Testing's, and the name before akmon. */
 export const PROFILE_NAMES = Object.freeze(['chrome-profile', 'chrome-profile-cft', 'chrome-profile-project']);
@@ -100,7 +100,7 @@ export const profileInstallation = (dir) => String(dir || '')
 
 /**
  * Whose Chrome the processes in `commandLines` (those listening on the DevTools port) are, for the
- * installation at `root`. `profile` is the profile set for this installation (OIKOS_CHROME_PROFILE),
+ * installation at `root`. `profile` is the profile set for this installation (OIKOS_CHROME_PROFILE, else AKMON_BROWSER_PROFILE),
  * `launch` the content of its `.local/.browser/launch.json` (the profile of its last `start`). Returns
  * { owner: 'ours', installation } when a process runs with one of this installation's profiles;
  * { owner: 'foreign', installation, profile } otherwise — `installation` the code of the installation
@@ -119,8 +119,11 @@ export function chromeOwnership(commandLines, { root = null, launch = null, prof
   return { owner: 'foreign', installation: profileInstallation(used), profile: used };
 }
 
-/** Whose Chrome answers on port `p` (chromeOwnership), read from the running processes. */
-export function ownerOf(p, profile = envValue('OIKOS_CHROME_PROFILE') || null) {
+/**
+ * Whose Chrome answers on port `p` (chromeOwnership), read from the running processes. `profile` is the
+ * one akmon's tool gets (akmonBrowserEnv), so the check and the tool agree on it.
+ */
+export function ownerOf(p, profile = akmonBrowserEnv(installRoot()).AKMON_BROWSER_PROFILE || null) {
   return chromeOwnership(chromeCommandLines(p), { root: installRoot(), launch: storeLaunches()[0] ?? null, profile });
 }
 
@@ -147,15 +150,27 @@ function profileProcesses(profiles, { windows = false } = {}) {
 }
 
 /**
+ * Whether a process runs from an executable under `dir` — another installation's Chrome running from
+ * the shared Chrome for Testing build there, which must not be moved from under it — or the process
+ * table could not be read, which counts as running. `processes` is for tests (as {@link processCommandLines}).
+ */
+export function buildRunning(dir, { processes = processCommandLines } = {}) {
+  const prefix = `${String(dir).replace(/[\\/]+$/, '')}/`;
+  const { lines, complete } = processes((line, args) => (args ? args[0] ?? '' : line).startsWith(prefix));
+  return lines.length > 0 || !complete;
+}
+
+/**
  * Whether this installation's Chrome may be running: true when a Chrome answers on its port, or on the
  * port a launch.json of either place of the store recorded, and is not told as another's (a Chrome
  * whose process was not found included); or when a process runs with one of the installation's profiles,
  * at either place or as launch.json recorded it, as its `--user-data-dir`; or when a process table that
- * had to be read could not be. `root` defaults to the installation, `port` to browserPort(), `launches`
- * to the launch.json files there are; `check` and `profileInUse` are for tests.
+ * had to be read could not be. `root` defaults to the installation, `port` to the one in `browserEnv`
+ * (akmonBrowserEnv(root), the environment akmon's tool gets) or akmon's formula, `launches` to the
+ * launch.json files there are; `browserEnv`, `check` and `profileInUse` are for tests.
  */
-export async function chromeRunning({ root = installPath(), port: p, launches = storeLaunches(), check = checkPort, profileInUse = profileProcesses } = {}) {
-  const ports = new Set([p ?? browserPort(), ...launches.map((l) => Number(l.port)).filter(Boolean)]);
+export async function chromeRunning({ root = installPath(), browserEnv = akmonBrowserEnv(root), port: p, launches = storeLaunches(), check = checkPort, profileInUse = profileProcesses } = {}) {
+  const ports = new Set([p ?? browserPort(root, browserEnv), ...launches.map((l) => Number(l.port)).filter(Boolean)]);
   for (const q of ports) {
     const found = await check(q);
     if (found && found.owner.owner !== 'foreign') return true;

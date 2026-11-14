@@ -28,9 +28,15 @@ go through it, and the rules oikos adds.
   project. Nothing else is needed on the command line; `--help` lists them.
   - Lifecycle: `status`, `start [--url URL] [--headless]`, `stop`, `restart`, `install`
     (a plan; `--yes` after the user agrees). Reads of the open page, no MCP server needed:
-    `pages`, `snapshot`, `screenshot`, `eval` (an expression that **reads**), `logs`, `net`.
-    Also `attach`, `detach`, `selectors`, `ext`, `record`, as akmon's skill describes them.
+    `pages`, `snapshot`, `eval` (an expression that **reads**), `logs`; `screenshot` and `net`
+    write into `.local/.browser/` (see below). Also `attach`, `detach`, `selectors`, `ext`,
+    `record`, as akmon's skill describes them.
   - `init` is not passed on: `.mcp.json` is written by `node oikos/tools/sync/cli.mjs`.
+  - Read akmon's skill for mechanics only: every `akmon tool browser <verb>` it shows runs here as
+    `node oikos/tools/browser/cli.mjs <verb>`; a bare `akmon` on PATH would not target this installation.
+  - Seeing a page: `screenshot` and `net` write by default into `.local/.browser/`, which the agent's
+    file tools cannot read (the secret guard closes it). Use the MCP `take_screenshot` tool to see a
+    page; write a CLI capture elsewhere with `--out <path>` only with the user's consent.
 - **The installation is the project.** Its Chrome profile and state live in `.local/.browser/`
   (git-ignored; the profile of a system Chrome is `chrome-profile`, of a Chrome for Testing
   `chrome-profile-cft`), so sign-ins survive restarts. The DevTools port is the installation's
@@ -39,7 +45,7 @@ go through it, and the rules oikos adds.
   this installation's profile and refuses another installation's, naming it.
 - **Settings** are read the way oikos reads every setting (`.local/.env`, then `oikos.yaml`
   `settings`, then the shell) and handed to akmon: `OIKOS_CHROME_PATH`, `OIKOS_CHROME_PROFILE`,
-  `OIKOS_CHROME_PORT`, `OIKOS_CHROME_PROXY` (an `AKMON_BROWSER_*` variable already set wins).
+  `OIKOS_CHROME_PORT`, `OIKOS_CHROME_PROXY` (the oikos setting wins; an `AKMON_BROWSER_*` variable already set is used only where oikos has none).
 - **The MCP server** is `akmon-browser` in `.mcp.json` (written by `sync`, enabled for every
   session); the agent's tools are `mcp__akmon-browser__*` — `list_pages`, `take_snapshot`,
   `take_screenshot`, `navigate_page`, `click`, `fill`, … and the read-only ones are pre-allowed. It
@@ -127,5 +133,7 @@ calendar go through the skill `workspace`, which uses this browser as one of its
   Chrome — tell the user what it names and follow its fix (close it, or give this installation a
   free `OIKOS_CHROME_PORT`); never point the server at that Chrome another way.
 - The DevTools port is local to the machine; never expose it on a network interface.
+- akmon's `status` may report the MCP server as "not wired" and suggest `init`: that is expected
+  here. oikos's sync wires `.mcp.json`, and `init` is refused.
 - The rest — a window that shows a sign-in page, cookies lost after switching Chrome, attach,
   recording — is in the akmon-browser skill's troubleshooting and references.
