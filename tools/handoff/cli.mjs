@@ -12,7 +12,8 @@
 // scratchpad of THIS installation (`<tmp>/claude-<uid>/<slug>/<session>/scratchpad`, D-PARK-SCRATCH) —
 // not the temporary folder at large; it is no source itself and a file inside it is carried only when
 // the current user owns it (scratchProblem); one that is, holds or lies in the home folder, or lies
-// in a `.local/`, is no root at all ($TMPDIR can move it). One refused entry refuses the park before anything is copied,
+// in a `.local/`, is no root at all ($TMPDIR can move it) — a home-based temporary folder is named with
+// its way out, since there no scratch file can be parked. One refused entry refuses the park before anything is copied,
 // and so does a destination that would leave `.local/<package>/` through a symlink.
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -101,15 +102,21 @@ const realOrNull = (path) => {
 const anyLocalFolder = (path) => path.split(/[\\/]/).some((part) => (FOLDS_CASE ? part.toLowerCase() : part) === PRIVATE_FOLDER);
 
 /**
- * Why the real folder `path` is no source root, or null: it is the file system's root, the home
- * folder, a folder holding it or lying in it (a $TMPDIR pointed at `~/.ssh` would make the keys a
- * scratchpad), or it lies inside a `.local/` folder (any installation's closed stores).
+ * Why the real folder `path` is no source root, as { why, fix } (`fix` names the user's way out where
+ * there is one) or null: it is the file system's root, the home folder, a folder holding it or lying in
+ * it (a $TMPDIR pointed at `~/.ssh` would make the keys a scratchpad), or it lies inside a `.local/`
+ * folder (any installation's closed stores).
  */
 function scratchRefusal(path) {
   const home = realOrNull(homedir()) || resolve(homedir());
-  if (dirname(path) === path) return `${path} is the root of the file system`;
-  if (inside(path, home) || inside(home, path)) return `${path} is, holds or lies in the home folder ${home}`;
-  if (anyLocalFolder(path)) return `${path} lies inside a ${PRIVATE_FOLDER}/ folder`;
+  if (dirname(path) === path) return { why: `${path} is the root of the file system` };
+  if (inside(path, home) || inside(home, path)) {
+    return {
+      why: `${path} is, holds or lies in the home folder ${home}`,
+      fix: ', so nothing under it is a scratch folder — set OIKOS_SCRATCH=<folder outside the home> and name a file inside it',
+    };
+  }
+  if (anyLocalFolder(path)) return { why: `${path} lies inside a ${PRIVATE_FOLDER}/ folder` };
   return null;
 }
 
@@ -128,16 +135,18 @@ function ownedFolder(path, uid) {
 
 /**
  * The scratch folder `path` as { root } by its real path, { refusal } when it exists but is unfit —
- * not the user's, or refused by scratchRefusal, or (`within` given) leading out of `within` through
- * a symlink — or {} when there is none.
+ * not the user's, refused by scratchRefusal (its `why` alone: a folder the user named themselves needs
+ * no advice about $OIKOS_SCRATCH), or (`within` given) leading out of `within` through a symlink —
+ * or {} when there is none.
  */
 function fitScratch(path, uid, within) {
   const real = realOrNull(path);
   if (!real) return {};
-  const refusal = !ownedFolder(real, uid)
-    ? `${real} is not a folder of yours`
-    : scratchRefusal(real) || (within && !inside(real, within) ? `${real} leads out of ${within}` : null);
-  return refusal ? { refusal } : { root: real };
+  if (!ownedFolder(real, uid)) return { refusal: `${real} is not a folder of yours` };
+  const unfit = scratchRefusal(real);
+  if (unfit) return { refusal: unfit.why };
+  if (within && !inside(real, within)) return { refusal: `${real} leads out of ${within}` };
+  return { root: real };
 }
 
 /** The names in the folder `path`, none where it cannot be read. */
@@ -154,12 +163,12 @@ function namesIn(path) {
  * `<tmp>/claude-<uid>/<slug>/<session>/scratchpad`, <tmp> the temporary folder (os.tmpdir(), which
  * $TMPDIR moves), <slug> the installation's path as projectSlug writes it, <session> any one folder.
  * None where there is no user id (Windows); the temporary folder itself refused (scratchRefusal) is
- * named, not used.
+ * named with the way out, not used — on such a machine no scratch file can be parked at all.
  */
 function sessionScratchpads(uid) {
   const tmp = realOrNull(tmpdir());
-  const refusal = tmp && scratchRefusal(tmp);
-  if (refusal) return [{ refusal: `the temporary folder ${refusal}` }];
+  const unfit = tmp && scratchRefusal(tmp);
+  if (unfit) return [{ refusal: `the temporary folder ${unfit.why}${unfit.fix || ''}` }];
   if (!tmp || uid === undefined || !ownedFolder(join(tmp, `claude-${uid}`), uid)) return [];
   const slugs = new Set([installRoot(), realOrNull(installRoot() || '')].filter(Boolean).map(projectSlug));
   return [...slugs].flatMap((slug) => {

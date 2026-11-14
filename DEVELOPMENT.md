@@ -80,8 +80,21 @@ tools/common/          shared modules; paths.mjs has the two roots (the core, th
                        reader of skills, connectors and resource notes
 tools/landscape/cli.mjs  resources | skills — the overview, computed on request
 node_modules/          npm dependencies (npm install); .cache/oikos/ holds programs a tool's
-                       `install` put into the project (LibreOffice, Chrome for Testing)
-tools/setup/cli.mjs    setup status | init [dir] | token — the executable side of BOOTSTRAP.md
+                       `install` put into the project (LibreOffice)
+tools/browser/         the shared Chrome — no mechanics of its own (ADR 0009): cli.mjs runs akmon's
+                       browser tool (`_aitna/akmon/js/tools/browser.mjs`) for the installation,
+                       mcp.mjs its MCP launcher; akmon.mjs names the tool files, checks they exist
+                       and maps the settings to `AKMON_BROWSER_*` (the installation is
+                       `AKMON_BROWSER_ROOT`); running.mjs is the one check oikos keeps, whether this
+                       installation's Chrome runs, which sync asks before it moves the store
+tools/setup/cli.mjs    setup status | init [dir] | token | mount add|remove — the executable side of
+                       BOOTSTRAP.md; mount.mjs changes the declarations (ADR 0007 D01)
+tools/sync/cli.mjs     sync | --check | --prune — the wiring of this machine; for a mount (ADR 0007 D03,
+                       mounts.mjs): claudeMdExcludes in the installation's and the mount's
+                       .claude/settings.local.json, the mount's git info/exclude, skill pointers, and
+                       permissions.additionalDirectories when it is outside; the hooks of
+                       .claude/settings.json and .qwen/settings.json from wiring.mjs; .mcp.json; each
+                       written path is recorded in .local/sync.json; --prune is a guarded write
 tools/desk/cli.mjs     new | index | list | find | compact | reopen — the desk agent's topics in
                        .local/desk/ (ADR 0006): folders, the derived INDEX.md, retention by age;
                        local writes of open files, compact and reopen previewed unless --yes
@@ -106,7 +119,21 @@ tools/hooks/           the guards of every agent host, fail open, shell parsing 
                        wired on UserPromptSubmit and, before a subagent starts (Claude `Task|Agent`,
                        Qwen `agent`), on PreToolUse — the reply names the event it answers;
                        package-guard (in an installation no Edit/Write of a path that really is in
-                       the core — node_modules stays free)
+                       the core — node_modules stays free — nor of a path inside a mount, ADR 0007
+                       D02); mounts-lock (the files the mount protection leans on, closed to the file
+                       tools, applied by package-guard: the mount declarations, .local/sync.json, the
+                       outgoing terms, the settings keys that run commands; ADR 0007 D01); mount-shell
+                       (a shell redirection or `git` write into a mount, called by git-guard, parsed by
+                       shell.mjs; a judgement of the words, not a boundary — the OS-level sandbox is
+                       task A12, ADR 0007 D02); browser-guard (a web fetch of a host a resource note
+                       reaches through the browser skill is denied: a login page is not the content);
+                       browser-drive-guard (a delegated agent and an autonomous run do not drive the
+                       browser: the browser CLI in any spelling and the `mcp__akmon-browser__*` tools
+                       are denied to them, and nobody closes an attached browser's page; the decision
+                       is akmon's, imported from the submodule, ADR 0009 D07); host-hook.mjs, the
+                       entry point of every guard: each runs
+                       in a child process with a 20 s deadline inside the wired 30 s timeout, and when a
+                       guard cannot decide, the fallback rules decide (ADR 0007 D02, D-AUDIT6-FALLBACK)
 tools/hooks/leaks.mjs  the private terms (~/.config/oikos/private-terms, never in the repository)
                        against the core's staged tree; `install` makes it the git pre-commit hook
 tools/hooks/host.mjs   the tool vocabularies of the hosts: what a call *is* (shell, file write,
@@ -128,8 +155,9 @@ An installation is the other half (examples/installation, OIKOS.md § What lives
 root `AGENTS.md`, `oikos.yaml`, `resources/`, `LANDSCAPE.md` and `oikos/`; in its git-ignored
 `.local/` what belongs to one machine and person — AGENTS.md (paths), .env, catalog.yaml, private.yaml
 (people: aliases, emails, accounts — personal data on purpose, listed in the installation's `.gitignore` by
-`setup init` and `sync`; ADR 0006 D06), browser/
-(Chrome profile), google/, sync.json (the MCP servers sync wrote). `sync` run there writes its
+`setup init` and `sync`; ADR 0006 D06), .browser/
+(Chrome profiles, a Chrome for Testing, `launch.json`; akmon's browser tool owns the content),
+.secrets/google/, sync.json (the MCP servers sync wrote). `sync` run there writes its
 wiring: skill pointers `.claude/skills/<name>/SKILL.md` → `../../../oikos/skills/<name>/SKILL.md`,
 hooks `$CLAUDE_PROJECT_DIR/oikos/tools/hooks/host-hook.mjs`, `.mcp.json` with this machine's
 absolute paths and `OIKOS_HOME`, and the core's real path in `permissions.additionalDirectories`
@@ -202,7 +230,7 @@ skill (the agent links it); mechanics a skill repeats go into a tool.
 | `cli.mjs` | commands on `util.parseArgs`, `--json`/`--help` everywhere, error → exit code, the proxy re-exec, the connector check (`requireConnector`) |
 | `http.mjs` | every outward request: named User-Agent, timeout, channel errors, Cloudflare detection; `download()` streams a large file (idle timeout, `.part` until complete) |
 | `paths.mjs` | the two roots: `CORE_ROOT` (the code, from `import.meta.url`) and `installRoot()` (`OIKOS_HOME` → `CLAUDE_PROJECT_DIR`/`QWEN_PROJECT_DIR` → the working folder and its parents; a hook process, `hookInstallation()`, takes the project folders first, then `OIKOS_HOME`, and an `OIKOS_HOME` that leads to no installation is `brokenHome`, ADR 0007 D02); `localPath()` for `.local/`, throwing outside an installation; `LOCAL_STORES` and `localStorePath()` — a tool's store under its dot name, or at its legacy place until sync moves it (ADR 0002) |
-| `local-stores.mjs` | the move of the stores in `.local/` from their legacy places to their dot names (`moveLocalStores`, run by sync; the browser profile only while its Chrome is stopped) |
+| `local-stores.mjs` | the move of the stores in `.local/` from their legacy places to their dot names (`moveLocalStores`, run by sync; the browser profile only while its Chrome is stopped) and the browser store's content to akmon's names (`moveBrowserParts`: `chrome-profile-project` → `chrome-profile-cft`, an oikos-installed Chrome for Testing → `.browser/chrome/chrome/`, ADR 0009) |
 | `env.mjs` | settings and credentials: `.local/.env` → `settings` of `oikos.yaml` → environment (a fallback shared by every installation); presence only, never values; `orgEmail()`, `orgGitEmail()` (the git email, only inside a configured domain); `isWsl()`, `environment()` — os, wsl, display |
 | `config.mjs` | the installation's `oikos.yaml`: organization, connectors per skill, settings, MCP servers, brand, task-tracking, agents, desk |
 | `desk.mjs` | the desk's shared facts: its folder name (`handoff` keeps it out of its packages), the unit statuses, the `desk:` part's defaults and checks |
@@ -213,7 +241,7 @@ skill (the agent links it); mechanics a skill repeats go into a tool.
 | `outgoing.mjs` | the one content check of what a write sends (ADR 0003): `outgoingFindings(text, rules)` (pure: `language`, `assistant`, `path`, `secret`, `term`), `outgoingRules()` (the built-in patterns plus the installation's `.local/outgoing.yaml`: `terms:`, `allow:`), `guardOutgoing(texts, values, rules)`, `uploadedMarkdown` (an uploaded image line as the service sees it), `nonLatinLetters` |
 | `files.mjs` | a path the user gave that does not exist: the similar files or folders that were probably meant (`missingMessage`) |
 | `local-files.mjs` | the path rule for a local file a tool carries elsewhere — `jira attach` and image lines upload it, `handoff park` copies it: its real path inside the allowed roots (`fileRoots`), never a closed store of `.local/` (`closedStore`), an `.env*` file or a dot-named entry outside a working folder of `.local/` (`dotComponent`); `pathProblem` / `nameProblem` say why, `localFile` judges one typed file; `scratchProblem` is the rule for the scratch folders a caller allows (`handoff park`: `$OIKOS_SCRATCH` and this installation's Claude Code session scratchpad, not the temporary folder at large): the folder itself is no source, a file inside is carried only when the current user owns it; `anyClosedStore` refuses a closed store of any `.local/`, not only the installation's |
-| `programs.mjs` | external programs a tool drives (LibreOffice, Chrome): explicit `OIKOS_*_PATH` → system install → a copy in `node_modules/.cache/oikos`; missing shared libraries (ldd) |
+| `programs.mjs` | external programs a tool drives (LibreOffice; Chrome is akmon's browser tool's, ADR 0009): explicit `OIKOS_*_PATH` → system install → a copy in `node_modules/.cache/oikos`; missing shared libraries (ldd) |
 | `atlassian.mjs` | the shared Jira/Confluence identity and client |
 | `adf.mjs` | Atlassian Document Format ↔ text/markdown (`[~accountid:ID]` is a mention) |
 | `diff.mjs` | a line diff for compact dry runs |
@@ -241,7 +269,7 @@ Rules:
   `connectors:` — before any credential lookup or request, so a token from the shell reaches only
   the installations that use the connector. Usage and `--help` print without the check; outside an
   installation it is the no-installation error. Tools that are not a connector (landscape, catalog,
-  browser, documents, footprint, handoff, desk, people, setup, sync, hooks) pass no `connector`. The same list decides the rest:
+  browser — which is no runCli tool, it runs akmon's —, documents, footprint, handoff, desk, people, setup, sync, hooks) pass no `connector`. The same list decides the rest:
   the tokens `setup` and the session-start hook ask for (`setup/tokens.mjs` `needed`) and the
   connectors `landscape skills` shows as used — nothing listed, for a skill or at all, means no
   connector, never every one.
@@ -285,10 +313,11 @@ Rules:
     import fails with `ERR_MODULE_NOT_FOUND`, stop with a UsageError naming
     `node tools/<name>/cli.mjs install` — never install silently.
   - Node resolves `tools/<name>/node_modules` first, then the root one, so a tool sees both.
-- **External programs** (LibreOffice, Chrome, …): use what the user already has; never install
+- **External programs** (LibreOffice, …; Chrome is akmon's browser tool's, whose `install` follows
+  the same rule): use what the user already has; never install
   a second copy of something that is installed. Look it up through `common/programs.mjs`
   (which also has `toolDependenciesInstalled` / `installToolDependencies` for the rule above;
-  `tools/browser` `install` is the example):
+  `tools/documents` `install` is the example):
   explicit path, the system install, under WSL also the Windows side (registry App Paths).
   Only when nothing is found, and with the user's agreement, offer two ways: the user installs it with their system,
   or the tool's `install` command puts a copy into the project (`node_modules/.cache/oikos`) —
@@ -331,8 +360,10 @@ note at all is valid — a fresh clone has none. Never a secret value.
   (`complexity`, `max-*`) only warn until the long functions are split.
 - `npm test` — installations made from examples/installation in temporary folders: each reads its
   own configuration through the shared core, sync keeps foreign wiring, `oikos/` is read-only
-  there, two installations never share a browser (and the browser's MCP server refuses another's
-  Chrome), `setup init`, the leak check.
+  there, two installations never share a browser (the port is the installation's, and what the
+  browser wrapper hands akmon names it as the project; whether akmon refuses another's Chrome is
+  akmon's own test), the wrapper's pass-through and its missing-tool error, sync's migration of the
+  browser wiring and store, `setup init`, the leak check.
 - Before a commit of the core: `node tools/hooks/leaks.mjs` (git-guard runs it on the agent's
   `git commit`; `node tools/hooks/leaks.mjs install` makes it the user's pre-commit hook).
 - The development layer is akmon (`_aitna/akmon`, a submodule; the `## Dev layer — akmon` block of

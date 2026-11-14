@@ -9,7 +9,7 @@ Where the Qwen-specific wiring lives, for whoever is looking for it:
 - `.qwen/settings.json` — the oikos hooks, wired for this host. Generated from
   `tools/hooks/wiring.mjs` by `npm run sync`; `npm run check` fails if the two drift apart.
 - In an installation, sync also writes `.qwen/skills/<name>/SKILL.md` — a pointer to each real
-  skill in `oikos/skills/<name>/SKILL.md` — and `.mcp.json` (oikos's `chrome-devtools` plus the
+  skill in `oikos/skills/<name>/SKILL.md` — and `.mcp.json` (oikos's `akmon-browser` plus the
   installation's `mcp_servers`, git-ignored, shared with the other hosts). The core repository,
   where oikos is developed, has neither.
 

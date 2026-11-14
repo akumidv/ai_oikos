@@ -1,7 +1,8 @@
 // `handoff park` and `list` (npm test, ADR 0005 D01–D03), in a copy of examples/installation with
-// the session scratchpad faked under a temporary folder (TMPDIR): the package folder is the task key
-// lowercased or a slug, never a closed or legacy store name of .local/; --from is judged by the path
-// rule of `jira attach` (tools/common/local-files.mjs) — inside the installation, its session
+// the session scratchpad faked under a temporary folder of the run's own (outside the home folder —
+// tests/helpers/installation.mjs, scratchRoot): the package folder is the task key lowercased or a
+// slug, never a closed or legacy store name of .local/; --from is judged by the path rule of
+// `jira attach` (tools/common/local-files.mjs) — inside the installation, its session
 // scratchpad or $OIKOS_SCRATCH (D-PARK-SCRATCH), nothing else in the temporary folder,
 // never a home path, a closed store, an .env file or a dot-named entry outside a working folder of
 // .local/ — and one refusal copies nothing; without --yes nothing is written.
@@ -326,6 +327,21 @@ test('park takes no source from a temporary folder that lies in or is the home f
       assert.ok(r.stderr.includes(realpathSync(tmp)), 'the refusal names the temporary folder');
     }
   }
+  assert.deepEqual(readdirSync(s.local()), []);
+});
+
+test('the refusal of a home-based temporary folder names the way out; a refused $OIKOS_SCRATCH names no route back to itself', () => {
+  const s = withHome();
+  writeFileSync(join(s.home, 'note.md'), 'n\n');
+  // $TMPDIR under the home folder: no scratch file can be parked, so the refusal says what to set instead.
+  const r = s.parkWith({ TMPDIR: s.home }, join(s.home, 'note.md'));
+  assert.equal(r.status, 1, r.output);
+  assert.match(r.stderr, /the temporary folder .* is, holds or lies in the home folder .*, so nothing under it is a scratch folder — set OIKOS_SCRATCH=<folder outside the home> and name a file inside it\. Nothing was copied\./);
+  // The folder the user named themselves: the same rule, no advice to name that very variable.
+  const refused = s.parkWith({ OIKOS_SCRATCH: s.home }, join(s.home, 'note.md'));
+  assert.equal(refused.status, 1, refused.output);
+  assert.match(refused.stderr, /\$OIKOS_SCRATCH .* is, holds or lies in the home folder/);
+  assert.doesNotMatch(refused.stderr, /set OIKOS_SCRATCH=/);
   assert.deepEqual(readdirSync(s.local()), []);
 });
 

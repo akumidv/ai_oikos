@@ -37,14 +37,33 @@ export const WIRING = [
   { guard: 'secret-guard', event: 'PreToolUse', group: 'shell' },
   { guard: 'secret-guard', event: 'PreToolUse', group: 'file' },
   { guard: 'package-guard', event: 'PreToolUse', group: 'file' },
+  { guard: 'browser-guard', event: 'PreToolUse', group: 'fetch' },
+  { guard: 'browser-drive-guard', event: 'PreToolUse', group: 'browser' },
   { guard: 'context-pressure', event: 'PreToolUse', group: 'agent' },
 ];
 
 // `seed`: the host's own keys a settings file starts with when `sync` creates it; afterwards they
 // are the host's and the person's, never rewritten. Both hosts pre-allow the browser's read-only
 // DevTools tools, each per tool (`mcp__<server>__<tool>`), never the whole server, which also writes.
+// The server is `akmon-browser` since ADR 0009; `migrateSeededRules` renames what an earlier sync seeded.
 const CHROME_READS = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'];
-const CHROME_READ_RULES = CHROME_READS.map((t) => `mcp__chrome-devtools__${t}`);
+const CHROME_READ_RULES = CHROME_READS.map((t) => `mcp__akmon-browser__${t}`);
+const LEGACY_CHROME_READ_RULES = CHROME_READS.map((t) => `mcp__chrome-devtools__${t}`);
+
+/**
+ * `settings` with the read-only rules an earlier sync seeded under the server's old name
+ * (`mcp__chrome-devtools__<tool>`) replaced by the current ones: only when the file still holds one of
+ * them — a person who removed them keeps it so — and only those exact rules; every other rule, and
+ * every rule of the person's own, stays, and a current rule already there is not added twice.
+ * @param {object} settings a parsed settings file
+ * @returns {object} `settings` itself when there is nothing to rename
+ */
+export function migrateSeededRules(settings) {
+  const allow = settings?.permissions?.allow;
+  if (!Array.isArray(allow) || !allow.some((rule) => LEGACY_CHROME_READ_RULES.includes(rule))) return settings;
+  const kept = allow.filter((rule) => !LEGACY_CHROME_READ_RULES.includes(rule));
+  return { ...settings, permissions: { ...settings.permissions, allow: [...kept, ...CHROME_READ_RULES.filter((rule) => !kept.includes(rule))] } };
+}
 
 // `dir`: the host's folder in a project; `userDir`: its folder under the user's home, where the
 // user-level settings live (`userDirVar`: the environment variable that moves that folder, when the
@@ -60,6 +79,8 @@ export const HOSTS = {
       session: null,
       shell: 'Bash',
       file: 'Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob',
+      fetch: 'WebFetch',
+      browser: 'Bash|mcp__akmon-browser__.*',
       agent: 'Task|Agent',
     },
   },
@@ -72,6 +93,8 @@ export const HOSTS = {
       session: 'startup|resume|clear|compact',
       shell: '^run_shell_command$',
       file: '^(read_file|grep_search|glob|list_directory|zoom_image|lsp|edit|write_file|notebook_edit)$',
+      fetch: '^web_fetch$',
+      browser: '^(run_shell_command|mcp__akmon-browser__.*)$',
       agent: '^agent$',
     },
   },

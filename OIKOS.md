@@ -24,8 +24,15 @@ happens in the oikos repository (its `AGENTS.md` and `DEVELOPMENT.md`), not in a
 |---|---|---|
 | Rules, skills, connectors, tools | oikos — `oikos/` in the installation (public) | everyone |
 | How the organization's knowledge and documents are kept (`AGENTS.md`, imports this file); the organization, its connectors, settings, MCP servers and brand (`oikos.yaml`); its resources (`resources/`, `LANDSCAPE.md`) | the installation's root (its own, private repository if any) | the organization's people |
-| This machine's paths (`AGENTS.md`: the vault, the memory note), the user's catalog of counterparties and folders (`catalog.yaml`), the people they work with — aliases, emails, tracker accounts (`private.yaml`: personal data by design, never committed, looked up before a tracker search and added to after one), a personal backlog, personal working material — notes, drafts, a CV under work — under any name that does not start with `.`; the stores the tools keep under dot names, closed to the agent: tokens (`.env`), sign-ins (`.secrets/`), the shared browser's profile (`.browser/`) | the installation's `.local/` (git-ignored as a whole) | this machine's user |
+| This machine's paths (`AGENTS.md`: the personal memory note), the user's personal mounts (`mounts.yaml`: a vault of notes on this machine), the user's catalog of counterparties and folders (`catalog.yaml`), the people they work with — aliases, emails, tracker accounts (`private.yaml`: personal data by design, never committed, looked up before a tracker search and added to after one), a personal backlog, personal working material — notes, drafts, a CV under work — under any name that does not start with `.`; the stores the tools keep under dot names, closed to the agent: tokens (`.env`), sign-ins (`.secrets/`), the shared browser's profile (`.browser/`) | the installation's `.local/` (git-ignored as a whole) | this machine's user |
 | Knowledge, final documents, personal agent memory | where the installation's `AGENTS.md` says (a vault, a knowledge base) | the user and their organization |
+
+**Mounts** are other repositories the installation uses: a project with its own skills, or a vault
+of notes. They are declared in `oikos.yaml` and in `.local/mounts.yaml`; the local entry wins, but
+only narrows what the shared one allows ([mounts](docs/design/mounts.md),
+[ADR 0007](docs/adr/0007-mounts.md) D01). A mount's own rules never load here: its skills are
+pointed to, and its notes are reached only through the `vault` connector. An installation writes only
+into itself; the one route into a mount is a note written by that connector (D02).
 
 **oikos's own files are not changed in ordinary work** — only the installation's files and the
 places its `AGENTS.md` names. A change useful to every user is proposed to the user and made in
@@ -95,7 +102,7 @@ installation's root: a tool finds the installation from where it runs (or from `
 from where its code lies, so the same core serves every installation on the machine. Run from
 elsewhere — the vault, a folder of documents — a tool says it found no installation; go back to the
 installation's root or set `OIKOS_HOME` for that command. `oikos/` is read-only in an installation
-(a hook denies edits there).
+(a hook denies the file tools edits there; a write made through a shell command is an accepted gap, ADR 0007 D02).
 
 The organization's resources, what each is for and which skill reaches it:
 `node oikos/tools/landscape/cli.mjs resources` (`resources <id>` for one); the notes are the
@@ -219,4 +226,10 @@ pitfalls. Nothing about one organization. Experience about developing oikos is n
 lesson the code needs goes into the code, its tests or the section of DEVELOPMENT.md it concerns,
 and its history stays in git.
 
-- none yet
+- A page behind a sign-in answers a web fetch with its login page, so "the page was empty" is a
+  wrong answer: read it in the shared Chrome, through the browser skill (the akmon-browser MCP
+  server), where the user has signed in. `node oikos/tools/browser/cli.mjs status` says whether
+  the shared Chrome runs; if the server is missing from `/mcp`, `node oikos/tools/sync/cli.mjs`,
+  then `start` the Chrome and reconnect. Only the user's own session drives it: a hook denies the
+  browser CLI and the `mcp__akmon-browser__*` tools to a subagent and to an autonomous run, so a
+  delegated step that needs the page is handed back to the main session.

@@ -6,8 +6,8 @@
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CORE_ROOT } from '../../tools/common/paths.mjs';
 
@@ -23,10 +23,38 @@ export const FAKE_FETCH = join(HERE, 'fake-fetch.mjs');
 
 const made = [];
 process.on('exit', () => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
-const base = mkdtempSync(join(tmpdir(), 'oikos-connectors-'));
+
+/** `path` is `root` or lies below it. */
+const liesIn = (path, root) => path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+const realOf = (path) => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The root this run's temporary folders are made under: one known to lie outside the home folder.
+ * A tool that takes a source from a scratch folder refuses a root that is, holds or lies in the home
+ * folder (`handoff park`, tools/handoff/cli.mjs — a $TMPDIR moved there would make `~/.ssh` a
+ * scratchpad), and a developer's own shell often has exactly that (`TMPDIR="$HOME/.tmp"`); inheriting
+ * it would make the same suite green in CI and red at their keyboard. Where the file system offers no
+ * temporary folder outside the home (a Windows profile holds its TEMP), the process one is it.
+ */
+const scratchRoot = () => {
+  const home = realOf(homedir()) || homedir();
+  const outside = (path) => {
+    const real = realOf(path);
+    return real && !liesIn(real, home) && !liesIn(home, real) ? real : null;
+  };
+  return [tmpdir(), '/tmp'].map(outside).find(Boolean) || tmpdir();
+};
+
+const base = mkdtempSync(join(scratchRoot(), 'oikos-connectors-'));
 made.push(base);
 
-/** A new empty folder under this run's temporary base. */
+/** A new empty folder under this run's temporary base (outside the home folder, scratchRoot). */
 export const tempDir = (prefix) => mkdtempSync(join(base, prefix));
 
 /** The fixture's `oikos.yaml` with gitlab listed too (the example installation uses only github). */
@@ -42,11 +70,13 @@ export function installation(config) {
   return dir;
 }
 
-// Every key a connector reads, so the developer's own shell profile cannot leak into a test; the
-// proxy variables too, so the CLI does not re-run itself without the preloaded fetch.
+// Every key a connector reads, plus the scratch folder `handoff park` may take, so the developer's own
+// shell profile cannot leak into a test; the proxy variables too, so the CLI does not re-run itself
+// without the preloaded fetch.
 const SCRUBBED = [
   'OIKOS_HOME', 'CLAUDE_PROJECT_DIR', 'QWEN_PROJECT_DIR', 'INIT_CWD', 'PWD',
-  'GMAIL_USER', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'OIKOS_FAKE_FETCH', 'OIKOS_FAKE_FETCH_LOG',
+  'OIKOS_FAKE_FETCH', 'OIKOS_FAKE_FETCH_LOG', 'OIKOS_SCRATCH',
+  'GMAIL_USER', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM',
   'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NODE_USE_ENV_PROXY', 'NODE_OPTIONS',
 ];
 const SCRUBBED_PREFIX = /^(GITHUB|GITLAB|JIRA|CONFLUENCE)_/;

@@ -77,9 +77,8 @@ this ADR.
   BOM, a comment or a trailing comma is denied as uncheckable); a current file that does not parse
   denies every edit to it; an absent file counts as `{}`. Also closed to the file tools, judged by
   real path: `.mcp.json` at the installation root, `~/.claude.json` and the one in `CLAUDE_CONFIG_DIR`,
-  and the shell startup files of the home (`~/.bashrc`, `~/.profile`, `~/.bash_profile`, `~/.zshrc`
-  and the other shell startup files, `$ZDOTDIR`'s zsh files, `~/.config/fish/conf.d` and
-  `~/.config/environment.d`). The user edits them in their own editor. Audit 6
+  and the shell startup files and folders of the home that the design row D-AUDIT4-STARTUP-FILES
+  lists (`docs/design/mounts.md`). The user edits them in their own editor. Audit 6
   (D-AUDIT6-FRONTMATTER-HOOKS = B): a file tool may not write a skill, agent or command markdown file
   under `.claude/skills`, `.claude/agents` or `.claude/commands`, in the project or the user config dir,
   whose front matter has a top-level `hooks` key; a malformed front matter with a `hooks:` line is

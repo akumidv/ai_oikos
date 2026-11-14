@@ -17,7 +17,7 @@ Inventory of what lives under `.local/` (before D02):
 | Entry | Created by | Kind |
 |---|---|---|
 | `.env` | `setup init`, `setup token` | tokens |
-| `browser/` | `tools/browser/cli.mjs` | store: Chrome profiles, `launch.json` |
+| `browser/` | akmon's browser tool, run by `tools/browser/cli.mjs` ([ADR 0009](../adr/0009-browser-from-akmon.md)) | store: Chrome profiles, a Chrome for Testing, `launch.json` |
 | `google/` | `tools/google/auth.mjs` | credentials: OAuth client, token |
 | `AGENTS.md`, `catalog.yaml`, `sync.json`, `TASKS.md` | setup, catalog, sync, the user | working data |
 | `extension/` (F8, planned) | `sync` | generated build |

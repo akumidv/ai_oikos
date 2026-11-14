@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { CORE_ROOT } from '../tools/common/paths.mjs';
 import { globNamesSecret, isLocalStore } from '../tools/hooks/host.mjs';
 import { moveLocalStores } from '../tools/common/local-stores.mjs';
-import { chromeRunning } from '../tools/browser/cli.mjs';
+import { chromeRunning } from '../tools/browser/running.mjs';
 
 const CORE = realpathSync(CORE_ROOT);
 const HOOK = join(CORE, 'tools', 'hooks', 'host-hook.mjs');
@@ -197,8 +197,8 @@ test('the tools use a store at its new place, and at its old one until it is mov
   const root = temp();
   writeFileSync(join(root, 'oikos.yaml'), 'organization:\n  name: ACME Corp\n');
   const script = `import { googleDir } from ${JSON.stringify(new URL('../tools/google/auth.mjs', import.meta.url).href)};
-import { profileBase } from ${JSON.stringify(new URL('../tools/browser/cli.mjs', import.meta.url).href)};
-console.log(JSON.stringify([googleDir(), profileBase()]));`;
+import { localStorePath } from ${JSON.stringify(new URL('../tools/common/paths.mjs', import.meta.url).href)};
+console.log(JSON.stringify([googleDir(), localStorePath('browser') + '/chrome-profile']));`;
   const places = () => {
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { ...process.env, OIKOS_HOME: root } });
     assert.equal(r.status, 0, r.stderr);
@@ -283,6 +283,7 @@ test('chromeRunning: the port, the ports launch.json recorded, the profile proce
   assert.equal(await ask({ launches, profileInUse: seen }), true, 'a process with the profile');
   assert.ok(asked.profiles.includes(`${root}/.local/browser/chrome-profile`));
   assert.ok(asked.profiles.includes(`${root}/.local/browser/chrome-profile-project`));
+  assert.ok(asked.profiles.includes(`${root}/.local/.browser/chrome-profile-cft`), 'the Chrome for Testing profile of akmon\'s tool');
   assert.ok(asked.profiles.includes(`${root}/.local/.browser/chrome-profile`));
   assert.equal(asked.options.windows, process.platform === 'win32');
 });

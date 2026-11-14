@@ -48,6 +48,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/model-routing.mjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/work-style.mjs\""
           }
         ]
       }
@@ -89,6 +93,26 @@
         ]
       },
       {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" browser-guard",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|mcp__akmon-browser__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/host-hook.mjs\" browser-drive-guard",
+            "timeout": 30
+          }
+        ]
+      },
+      {
         "matcher": "Task|Agent",
         "hooks": [
           {
@@ -99,7 +123,7 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__akmon-browser__.*",
         "hooks": [
           {
             "type": "command",
@@ -110,6 +134,10 @@
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/settings-env-guard.mjs\""
+          },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/_aitna/akmon/js/hooks/role-on-code.mjs\""
@@ -152,11 +180,11 @@
   },
   "permissions": {
     "allow": [
-      "mcp__chrome-devtools__list_pages",
-      "mcp__chrome-devtools__take_snapshot",
-      "mcp__chrome-devtools__take_screenshot",
-      "mcp__chrome-devtools__list_console_messages",
-      "mcp__chrome-devtools__list_network_requests"
+      "mcp__akmon-browser__list_pages",
+      "mcp__akmon-browser__take_snapshot",
+      "mcp__akmon-browser__take_screenshot",
+      "mcp__akmon-browser__list_console_messages",
+      "mcp__akmon-browser__list_network_requests"
     ]
   }
 }

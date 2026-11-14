@@ -118,21 +118,21 @@ test('sync wires the installation into oikos/ and keeps what others wired', () =
   assert.ok(existsSync(join(dir, '.claude', 'skills', 'wiki', '..', '..', '..', 'oikos', 'skills', 'wiki', 'SKILL.md')), 'the pointer resolves');
   const qwen = readJson(join(dir, '.qwen', 'settings.json'));
   assert.ok(Object.values(qwen.hooks).flat().some((g) => g.hooks.some((h) => h.command.includes('$QWEN_PROJECT_DIR/oikos/tools/hooks/'))));
-  const reads = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'].map((t) => `mcp__chrome-devtools__${t}`);
-  assert.deepEqual(qwen.permissions.allow, reads, 'a new Qwen settings file pre-allows the read-only DevTools tools, each by name');
+  const reads = ['list_pages', 'take_snapshot', 'take_screenshot', 'list_console_messages', 'list_network_requests'].map((t) => `mcp__akmon-browser__${t}`);
+  assert.deepEqual(qwen.permissions.allow, reads,'a new Qwen settings file pre-allows the read-only DevTools tools, each by name');
   assert.deepEqual(qwen.context.includeDirectories, ['oikos'], 'Qwen may read through the oikos/ link');
   assert.deepEqual(readJson(join(dir, '.claude', 'settings.local.json')).permissions.additionalDirectories, [CORE]);
 
   let mcp = readJson(join(dir, '.mcp.json')).mcpServers;
-  assert.deepEqual(Object.keys(mcp).sort(), ['chrome-devtools', 'knowledge', 'theirs']);
-  assert.equal(mcp['chrome-devtools'].env.OIKOS_HOME, dir);
-  assert.equal(mcp['chrome-devtools'].args[0], join(CORE, 'tools', 'browser', 'mcp.mjs'));
+  assert.deepEqual(Object.keys(mcp).sort(), ['akmon-browser', 'knowledge', 'theirs']);
+  assert.equal(mcp['akmon-browser'].env.OIKOS_HOME, dir);
+  assert.equal(mcp['akmon-browser'].args[0], join(CORE, 'tools', 'browser', 'mcp.mjs'));
 
   // a server the installation drops goes; the foreign one stays
   writeFileSync(join(dir, 'oikos.yaml'), readFileSync(join(dir, 'oikos.yaml'), 'utf8').replace(/mcp_servers:[\s\S]*$/, ''));
   assert.equal(tool(dir, 'sync', []).status, 0);
   mcp = readJson(join(dir, '.mcp.json')).mcpServers;
-  assert.deepEqual(Object.keys(mcp).sort(), ['chrome-devtools', 'theirs']);
+  assert.deepEqual(Object.keys(mcp).sort(), ['akmon-browser', 'theirs']);
 });
 
 test('sync keeps the keys of an existing Qwen settings file and lets it read oikos/', () => {
@@ -167,7 +167,8 @@ test('oikos/ is read-only in an installation, the installation itself is not', (
 });
 
 test('two installations never share a browser', async () => {
-  const { defaultPort, ownerOf } = await import('../tools/browser/cli.mjs');
+  const { defaultPort } = await import('../tools/browser/akmon.mjs');
+  const { ownerOf } = await import('../tools/browser/running.mjs');
   const a = installation('a');
   const b = installation('b');
   assert.notEqual(defaultPort(a), defaultPort(b));
@@ -231,6 +232,81 @@ test('setup init without an email domain writes no git email into the installati
   made.push(base);
   const dir = init(base, ['--org', 'ACME Corp'], 'ada@other.example');
   assert.doesNotMatch(readFileSync(join(dir, '.local', '.env'), 'utf8'), /JIRA_EMAIL/, "another organization's address stays out");
+});
+
+/** A new empty git repository at `path`, for a vault clone. */
+function vaultClone(path) {
+  mkdirSync(path, { recursive: true });
+  assert.equal(spawnSync('git', ['init', '-q', path], { encoding: 'utf8', env: cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }) }).status, 0);
+  return path;
+}
+
+const statusOf = (dir) => tool(dir, 'setup', ['status', '--offline']).stdout;
+
+test('setup init --vault records a personal wiki mount, not the obsidian vault line', () => {
+  const base = mkdtempSync(join(tmpdir(), 'oikos-test-'));
+  made.push(base);
+  const vault = realpathSync(vaultClone(join(base, 'notes')));
+  const dir = init(base, ['--org', 'ACME Corp', '--vault', vault], 'ada@acme.example');
+  const local = readFileSync(join(dir, '.local', 'AGENTS.md'), 'utf8');
+  assert.doesNotMatch(local, /obsidian vault/);
+  assert.match(local, new RegExp(`^- personal memory: ${join(vault, 'agents', 'oikos.md')}$`, 'm'), 'the memory default still follows the vault');
+  const mounts = readFileSync(join(dir, '.local', 'mounts.yaml'), 'utf8');
+  assert.match(mounts, new RegExp(`^mounts:\\n {2}${vault}:\\n {4}use: \\[wiki\\]`, 'm'), mounts);
+  assert.doesNotMatch(readFileSync(join(dir, 'oikos.yaml'), 'utf8'), new RegExp(vault), 'the shared file is untouched');
+  const status = statusOf(dir);
+  assert.match(status, new RegExp(`ok {2}mount ${vault} — local layer, outside the installation · use: wiki`));
+  assert.doesNotMatch(status, /obsidian vault/, 'no hint without the line');
+  assert.doesNotMatch(status, /not ready:.*mount/);
+});
+
+test('setup init --vault with no clone yet records nothing and says how to add it', () => {
+  const base = mkdtempSync(join(tmpdir(), 'oikos-test-'));
+  made.push(base);
+  const vault = join(base, 'later');
+  const dir = init(base, ['--org', 'ACME Corp', '--vault', vault], 'ada@acme.example');
+  const r = spawnSync(process.execPath, [join(dir, 'oikos', 'tools', 'setup', 'cli.mjs'), 'init', dir, '--vault', vault], { cwd: base, encoding: 'utf8', env: cleanEnv() });
+  assert.match(r.stdout, /does not exist yet — clone the vault there/);
+  assert.match(r.stdout, /the vault is not recorded as a mount .*does not exist/);
+  assert.match(r.stdout, /mount add .*later --use wiki --personal --dry-run/);
+  assert.ok(!existsSync(join(dir, '.local', 'mounts.yaml')), 'nothing was recorded');
+  assert.doesNotMatch(readFileSync(join(dir, '.local', 'AGENTS.md'), 'utf8'), /obsidian vault/);
+});
+
+test('setup init --vault run again keeps the mount it recorded', () => {
+  const base = mkdtempSync(join(tmpdir(), 'oikos-test-'));
+  made.push(base);
+  const vault = realpathSync(vaultClone(join(base, 'notes')));
+  const dir = init(base, ['--org', 'ACME Corp', '--vault', vault], 'ada@acme.example');
+  const before = readFileSync(join(dir, '.local', 'mounts.yaml'), 'utf8');
+  const again = spawnSync(process.execPath, [join(dir, 'oikos', 'tools', 'setup', 'cli.mjs'), 'init', dir, '--vault', vault], { cwd: base, encoding: 'utf8', env: cleanEnv() });
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /is declared already/);
+  assert.equal(readFileSync(join(dir, '.local', 'mounts.yaml'), 'utf8'), before);
+});
+
+test('setup status names an old obsidian vault line and the mount that replaces it', () => {
+  const base = mkdtempSync(join(tmpdir(), 'oikos-test-'));
+  made.push(base);
+  const vault = realpathSync(vaultClone(join(base, 'notes')));
+  const dir = init(base, ['--org', 'ACME Corp'], 'ada@acme.example');
+  const line = join(dir, '.local', 'AGENTS.md');
+  writeFileSync(line, `${readFileSync(line, 'utf8')}- obsidian vault: ${vault}\n`);
+  const legacy = statusOf(dir);
+  assert.match(legacy, new RegExp(`ok {2}vault clone — ${vault}`));
+  assert.match(legacy, new RegExp(`is replaced by a personal wiki mount.*mount add ${vault} --use wiki --personal --dry-run`));
+
+  // The command the hint names: its dry run writes nothing, the real run records the mount.
+  const mountAdd = (...extra) => tool(dir, 'setup', ['mount', 'add', vault, '--use', 'wiki', '--personal', ...extra]);
+  const dry = mountAdd('--dry-run');
+  assert.equal(dry.status, 0, dry.stdout + dry.stderr);
+  assert.match(dry.stdout, /dry run: nothing written/);
+  assert.ok(!existsSync(join(dir, '.local', 'mounts.yaml')), 'a dry run writes nothing');
+  assert.equal(mountAdd().status, 0);
+  const migrated = statusOf(dir);
+  assert.match(migrated, new RegExp(`ok {2}mount ${vault} — local layer`));
+  assert.match(migrated, /the `obsidian vault:` line of \.local\/AGENTS\.md is no longer read/);
+  assert.doesNotMatch(migrated, /is replaced by a personal wiki mount/);
 });
 
 test('the leak check finds a private term staged in a repository', async () => {

@@ -1,5 +1,5 @@
-// External programs the tools drive (LibreOffice, Chrome). Looked for in this order:
-// 1. an explicit path (OIKOS_SOFFICE_PATH, OIKOS_CHROME_PATH — environment or the local env file);
+// External programs the tools drive (LibreOffice; Chrome is akmon's browser tool's, ADR 0009). Looked for in this order:
+// 1. an explicit path (OIKOS_SOFFICE_PATH — environment or the local env file);
 // 2. what the user already has installed: PATH and the platform's usual places; under WSL also
 //    the Windows side (registry App Paths), since that is where such programs usually are;
 // 3. only then a copy that the tool's `install` put into the project, after the user agreed

@@ -23,6 +23,19 @@ settings:
 mcp_servers:
   knowledge: { type: http, url: https://kb.example.com/mcp }
 
+# Other repositories the installation uses as sources (docs/design/mounts.md; ADR 0007). Left commented:
+# each path must be a repository top, or `sync --check` is red. Keys are the mount's path, relative to
+# this folder with '/' separators and no '..' (a personal or absolute path goes to .local/mounts.yaml).
+# mounts (a mapping; uncomment its key and the entries below it):
+#   notes/handbook:                 # a folder of notes: the wiki connector writes into it
+#     use: [wiki]                   # wiki | skills; absent — read only
+#     wiki: { name: handbook, rules: HOUSE.md, template: templates/note.md, inbox: inbox/, default: true }
+#   projects/ops-root:              # a development root: its skills are pointed to here
+#     use: [ skills ]
+#     skills: { from: .claude/skills, prefix: ops, only: [release-notes] }   # only: the names to point to
+#     # skills.tracked: true is for .local/mounts.yaml only (an inside mount's pointers may then be committed)
+#   docs/reference: null            # read only: nothing is taken from it
+
 # Who may move a task between two statuses (ADR 0001; skills/task-tracking/connectors/jira.md).
 # Without it the tracker keeps JIRA_AGENT_STATUSES. Left commented so the tests start from that.
 # task-tracking:

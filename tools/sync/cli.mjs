@@ -11,7 +11,8 @@
 //   - oikos's own MCP servers plus the installation's (`mcp_servers` of oikos.yaml) → .mcp.json,
 //     git-ignored, with this machine's absolute paths and OIKOS_HOME;
 //   - the core's real path → `permissions.additionalDirectories` of .claude/settings.local.json,
-//     so the host reads oikos through the `oikos/` link without asking; for Qwen, `oikos` in
+//     so the host reads oikos through the `oikos/` link without asking (recorded as `coreDirs` in
+//     .local/sync.json; a moved installation drops a recorded entry of the old core); for Qwen, `oikos` in
 //     `context.includeDirectories` of .qwen/settings.json does the same;
 //   - the declared mounts (`mounts` of oikos.yaml and .local/mounts.yaml) → rule exclusions both ways
 //     for an inside mount, its real path in `additionalDirectories` for an outside one, and the
@@ -28,14 +29,19 @@
 // In an installation it also appends `.local/private.yaml` (the people file) to the root `.gitignore`
 // when that exists without the line, and moves the stores of `.local/` still at their old places to their
 // dot-named ones (common/local-stores.mjs, ADR 0002): the browser profile only while this
-// installation's Chrome is stopped.
+// installation's Chrome is stopped — and, under the same condition, the browser store's content
+// to akmon's names (`chrome-profile-cft`, `chrome/chrome/`, ADR 0009).
 // `--check` changes nothing and exits 1 on any problem or drift.
+// A moved installation is told by the root an earlier sync wrote into .mcp.json (`OIKOS_HOME` of oikos's
+// own server): when that is another folder, every generated file that names it is out of date and
+// says so, and sync rewrites them to this root — the mounts' record in .local/sync.json is carried
+// over to the new paths first, so the entries written for the old root are replaced, not left behind.
 // A mount that has disappeared from the configuration keeps its wiring — ignore lines, rule exclusions,
 // pointers, the recorded root — and sync says so with a `note:`; `--prune` takes it away, and is a
 // guarded write (tools/hooks/writes.mjs): the same command with `--dry-run` first, which lists what
 // would change and writes nothing (it exits 1 only on a problem, as `--check` also does on drift).
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, rmSync, realpathSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { availableParallelism } from 'node:os';
 import { CORE_ROOT } from '../common/env.mjs';
@@ -43,14 +49,14 @@ import { installRoot, INSTALL_FILE } from '../common/paths.mjs';
 import { taskTrackingConflicts } from '../common/transitions.mjs';
 import { loadLandscape } from '../common/landscape.mjs';
 import { config } from '../common/config.mjs';
-import { moveLocalStores } from '../common/local-stores.mjs';
+import { moveBrowserParts, moveLocalStores } from '../common/local-stores.mjs';
 import { outgoingRules } from '../common/outgoing.mjs';
 import { PEOPLE_IGNORE_COMMENT, PEOPLE_IGNORE_LINE } from '../common/people.mjs';
-import { chromeRunning } from '../browser/cli.mjs';
+import { chromeRunning } from '../browser/running.mjs';
 import { WRITES } from '../hooks/writes.mjs';
-import { goneRoots, wireMounts } from './mounts.mjs';
+import { goneRoots, namesRoot, wireMounts } from './mounts.mjs';
 import { MARKER, isOurs, pointer, mountPointers } from './pointers.mjs';
-import { HOSTS, hostNames, settingsFile, hooksFor, guardsIn, mergeHooks } from '../hooks/wiring.mjs';
+import { HOSTS, hostNames, settingsFile, hooksFor, guardsIn, mergeHooks, migrateSeededRules } from '../hooks/wiring.mjs';
 
 // Options are read only before `--`, as the write guard reads them: otherwise `sync -- --prune` would
 // prune with no dry run the guard could see.
@@ -66,10 +72,16 @@ const INSTALL = installRoot();
 const TARGET = INSTALL || CORE_ROOT; // the folder whose wiring is written
 const BASE = INSTALL ? 'oikos/' : ''; // where oikos is, seen from that folder
 const CORE_REAL = realpathSync(CORE_ROOT);
+const BROWSER_SERVER = 'akmon-browser'; // oikos's MCP server in .mcp.json (ADR 0009)
+const LEGACY_BROWSER_SERVER = 'chrome-devtools'; // its name before, replaced when sync wrote it
+
+let coreDirs = null; // the core path entries sync owns in additionalDirectories (null: the settings file could not be edited)
+let movedFrom = null; // the installation root an earlier sync recorded, when it is not this one (set with the MCP servers)
 
 function write(path, content, label) {
-  if (existsSync(path) && readFileSync(path, 'utf8') === content) return;
-  changed.push(label);
+  const had = existsSync(path) ? readFileSync(path, 'utf8') : null;
+  if (had === content) return;
+  changed.push(movedFrom && had !== null && namesRoot(had, movedFrom) ? `${label} (names the old root ${movedFrom})` : label);
   if (!readOnly) {
     mkdirSync(join(path, '..'), { recursive: true });
     writeFileSync(path, content);
@@ -93,6 +105,19 @@ function readJson(path, label) {
     problems.push(`${label}: the file does not parse (${e.message.split('\n')[0]})`);
   }
   return null;
+}
+
+/**
+ * The installation root `recorded` names, when it is not this installation's: an absolute path that
+ * is neither `INSTALL` nor another way to reach it (a link). Null for anything else — nothing
+ * recorded, not a path, or the same folder.
+ */
+function recordedRoot(recorded) {
+  if (typeof recorded !== 'string' || !isAbsolute(recorded) || recorded === INSTALL) return null;
+  try {
+    if (realpathSync(recorded) === realpathSync(INSTALL)) return null;
+  } catch { /* the recorded folder is gone: it is the old root */ }
+  return recorded;
 }
 
 const json = (data) => `${JSON.stringify(data, null, 2)}\n`;
@@ -174,7 +199,8 @@ for (const host of hostNames) {
     const h = (have[key] || []).join(', ') || 'nothing';
     if (check && existsSync(path) && w !== h) problems.push(`${label}: ${key} wires ${h}, tools/hooks/wiring.mjs says ${w} — sync`);
   }
-  const base = existsSync(path) ? current : HOSTS[host].seed;
+  // The read-only rules seeded under the old server name become the new ones; the rest of the file is the host's.
+  const base = existsSync(path) ? migrateSeededRules(current) : HOSTS[host].seed;
   const settings = { ...base, hooks: mergeHooks(current.hooks || {}, hooks) };
   write(path, json(INSTALL && host === 'qwen' ? withOikosIncluded(settings) : settings), settingsFile(host));
 }
@@ -191,17 +217,6 @@ function withOikosIncluded(settings) {
 }
 
 if (INSTALL) {
-  // The core's real path, machine-specific, so in the git-ignored local settings. Claude Code
-  // resolves the `oikos/` link and would otherwise ask before reading the skills it points at.
-  const path = join(INSTALL, '.claude', 'settings.local.json');
-  const local = readJson(path, '.claude/settings.local.json');
-  if (local) {
-    const dirs = local.permissions?.additionalDirectories || [];
-    if (!dirs.includes(CORE_REAL)) {
-      write(path, json({ ...local, permissions: { ...local.permissions, additionalDirectories: [...dirs, CORE_REAL] } }), '.claude/settings.local.json additionalDirectories');
-    }
-  }
-
   // -- the people file stays out of git --------------------------------------------------
   // `.local/` is ignored as a whole; the people file (personal data on purpose) is also named, so
   // it stays out of git even if `.local/` is ever un-ignored. Only an installation that has a
@@ -225,39 +240,81 @@ if (INSTALL) {
 
   // -- MCP servers ------------------------------------------------------------------------
   // Every host reads .mcp.json — Qwen Code only once its servers are approved for this folder
-  // (`qwen mcp approve --all`, again after an entry here changes; BOOTSTRAP.md). oikos brings the browser's DevTools server; the installation adds
+  // (`qwen mcp approve --all`, again after an entry here changes; BOOTSTRAP.md). oikos brings the browser's
+  // `akmon-browser` server (ADR 0009); the installation adds
   // its own (a knowledge base, …), and one of the same name replaces oikos's. The names oikos
   // wrote are kept in .local/sync.json, so a server it no longer wants goes and a server someone
-  // else added stays.
+  // else added stays — which is how the `chrome-devtools` entry an earlier sync wrote is replaced.
   const CORE_MCP = {
-    'chrome-devtools': { type: 'stdio', command: 'node', args: [join(CORE_REAL, 'tools', 'browser', 'mcp.mjs')], env: { OIKOS_HOME: INSTALL } },
+    [BROWSER_SERVER]: { type: 'stdio', command: 'node', args: [join(CORE_REAL, 'tools', 'browser', 'mcp.mjs')], env: { OIKOS_HOME: INSTALL } },
   };
   const servers = { ...CORE_MCP, ...config().mcp_servers };
   const mcpPath = join(INSTALL, '.mcp.json');
   const mcp = readJson(mcpPath, '.mcp.json');
+  // Only oikos's own entry tells: one the installation overrides, or one sync did not write, is not evidence.
+  // An installation not synced since the rename still has the entry under its old name: read it there.
+  const ownEntry = [BROWSER_SERVER, LEGACY_BROWSER_SERVER].find((name) => (state.mcp || []).includes(name) && mcp?.mcpServers?.[name]
+    && (name === BROWSER_SERVER ? servers[name] === CORE_MCP[name] : !(name in config().mcp_servers)));
+  movedFrom = ownEntry && servers[BROWSER_SERVER] === CORE_MCP[BROWSER_SERVER] ? recordedRoot(mcp.mcpServers[ownEntry].env?.OIKOS_HOME) : null;
+  if (movedFrom) console.log(`note: this installation was moved — an earlier sync recorded ${movedFrom}; what names it is rewritten to ${INSTALL}`);
   if (mcp) {
     const kept = Object.fromEntries(Object.entries(mcp.mcpServers || {}).filter(([name]) => !(state.mcp || []).includes(name) && !(name in servers)));
     write(mcpPath, json({ ...mcp, mcpServers: { ...servers, ...kept } }), '.mcp.json');
   }
 
+  // -- the core's path in the host's file access ---------------------------------------------
+  // The core's real path, machine-specific, so in the git-ignored local settings. Claude Code
+  // resolves the `oikos/` link and would otherwise ask before reading the skills it points at.
+  // The list is append-only, with one exception (D-S5-CORE-MOVED): when the installation moved, a
+  // core path an earlier sync recorded in `.local/sync.json` (`coreDirs`) and that is not this core's
+  // is dropped. An entry sync did not record — the person's, or one written before the record existed —
+  // is never removed. Sync's mount entries are recorded under `mounts` (tools/sync/mounts.mjs).
+  const settingsPath = join(INSTALL, '.claude', 'settings.local.json');
+  const local = readJson(settingsPath, '.claude/settings.local.json');
+  if (local && !Array.isArray(local.permissions?.additionalDirectories ?? [])) {
+    problems.push('.claude/settings.local.json: permissions.additionalDirectories must be a list; the core path is not wired');
+  } else if (local) {
+    const dirs = local.permissions?.additionalDirectories || [];
+    const recorded = Array.isArray(state.coreDirs) ? state.coreDirs.filter((d) => typeof d === 'string') : [];
+    const stale = movedFrom ? recorded.filter((d) => d !== CORE_REAL && dirs.includes(d)) : [];
+    const kept = dirs.filter((d) => !stale.includes(d));
+    const added = kept.includes(CORE_REAL) ? [] : [CORE_REAL];
+    if (stale.length || added.length) {
+      write(settingsPath, json({ ...local, permissions: { ...local.permissions, additionalDirectories: [...kept, ...added] } }),
+        `.claude/settings.local.json additionalDirectories${stale.length ? ` (drops the old core ${stale.join(', ')})` : ''}`);
+    }
+    // What sync owns here: the recorded entries still in the list, and the one it adds now.
+    coreDirs = [...recorded.filter((d) => !stale.includes(d) && dirs.includes(d)), ...added];
+    if (movedFrom && recorded.length === 0) {
+      const leftover = dirs.filter((d) => d !== CORE_REAL && !existsSync(d) && d.endsWith(`/${basename(CORE_REAL)}`));
+      if (leftover.length) console.log(`note: .claude/settings.local.json additionalDirectories still lists ${leftover.join(', ')}, which looks like the old core; sync did not record writing it, so it stays — remove it by hand`);
+    }
+  }
+
   // -- mounts -----------------------------------------------------------------------------
   // tools/sync/mounts.mjs computes the wiring of the declared mounts (docs/design/mounts.md) as file
   // edits; what it wrote is recorded in the same .local/sync.json, beside the MCP names.
-  const wiredMounts = wireMounts(INSTALL, config().mounts, state.mounts, mountPlan.pointers, { prune });
+  const wiredMounts = wireMounts(INSTALL, config().mounts, state.mounts, mountPlan.pointers, { prune, movedFrom });
   problems.push(...wiredMounts.problems);
   for (const edit of wiredMounts.edits) apply(edit);
   for (const { root, wiring } of wiredMounts.pending) {
     console.log(`note: the mount ${root} is no longer configured; its wiring is kept (${wiring}) — \`node oikos/tools/sync/cli.mjs --prune --dry-run\` shows what taking it away would change`);
   }
   const recordMounts = Object.keys(wiredMounts.record).length > 0 || state.mounts !== undefined;
-  if (mcp || recordMounts) {
-    write(statePath, json({ ...state, ...(mcp ? { mcp: Object.keys(servers) } : {}), ...(recordMounts ? { mounts: wiredMounts.record } : {}) }), '.local/sync.json');
+  const recordCore = coreDirs !== null && (coreDirs.length > 0 || state.coreDirs !== undefined);
+  if (mcp || recordMounts || recordCore) {
+    const { coreDirs: _previous, ...rest } = state;
+    write(statePath, json({ ...rest, ...(mcp ? { mcp: Object.keys(servers) } : {}), ...(recordMounts ? { mounts: wiredMounts.record } : {}), ...(recordCore ? { coreDirs } : {}) }), '.local/sync.json');
   }
 
   // -- stores of .local/ ------------------------------------------------------------------
   // A store at its old place is moved to its dot-named one, which the secret guard keeps closed
   // by name; the old names are closed too, so a store left in place is never open meanwhile.
-  for (const m of await moveLocalStores(INSTALL, { check: readOnly, browserRunning: () => chromeRunning() })) {
+  // Whether the Chrome runs is asked once for both moves: the store itself, then what akmon names differently in it.
+  let running;
+  const browserRunning = () => (running ??= chromeRunning());
+  const moves = [...await moveLocalStores(INSTALL, { check: readOnly, browserRunning }), ...await moveBrowserParts(INSTALL, { check: readOnly, browserRunning })];
+  for (const m of moves) {
     const move = `${m.from} → ${m.to}`;
     if (m.state === 'moved' || m.state === 'out of date') changed.push(move);
     // A failed move is a problem: the rest of sync runs, and it exits 1 like on any other problem.

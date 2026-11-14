@@ -65,6 +65,26 @@
         ]
       },
       {
+        "matcher": "^web_fetch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" browser-guard",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "^(run_shell_command|mcp__akmon-browser__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$QWEN_PROJECT_DIR/tools/hooks/host-hook.mjs\" browser-drive-guard",
+            "timeout": 30
+          }
+        ]
+      },
+      {
         "matcher": "^agent$",
         "hooks": [
           {

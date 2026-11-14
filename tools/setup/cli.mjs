@@ -17,8 +17,10 @@ import { mountFacts } from '../common/mounts.mjs';
 import { configFile, config, listedConnectors } from '../common/config.mjs';
 import { PEOPLE_IGNORE_COMMENT, PEOPLE_IGNORE_LINE } from '../common/people.mjs';
 import { TOKENS, needed, whoamiTools, tokensToAsk } from './tokens.mjs';
-import { defaultPort } from '../browser/cli.mjs';
-import { mountCommand } from './mount.mjs';
+import { akmonTools, defaultPort } from '../browser/akmon.mjs';
+import { writeFileAtomic } from '../common/tracking-config.mjs';
+import { changeMounts } from '../common/mount-config.mjs';
+import { mountCommand, changeOf, showChange } from './mount.mjs';
 
 const CORE_REAL = realpathSync(CORE_ROOT);
 
@@ -46,9 +48,9 @@ How the organization's web resources sign in (an SSO).
 Where drafts and final documents go (a vault, a folder), and the brand skill for on-brand documents.
 `;
 
-const localAgentsTemplate = ({ vault, memory }) => `# This machine (never committed)
+const localAgentsTemplate = ({ memory }) => `# This machine (never committed)
 
-${vault ? `- obsidian vault: ${vault}\n` : ''}${memory ? `- personal memory: ${memory}\n` : ''}- credentials: .local/.env
+${memory ? `- personal memory: ${memory}\n` : ''}- credentials: .local/.env
 `;
 
 const configTemplate = ({ org, domain, port }) => `# oikos installation — one organization (tools/common/config.mjs reads it)
@@ -188,6 +190,29 @@ function mountRows(mounts, row) {
   for (const m of mounts) row(isRepoTop(m.root), `mount ${m.path}`, mountFacts(m));
 }
 
+/**
+ * Record the vault `path` as a personal wiki mount of the installation `dir`, as
+ * `mount add <path> --use wiki --personal` does. A change the helper refuses (the vault is not cloned
+ * yet, or is not a repository top) records nothing: init says so and how to add it later.
+ */
+function registerVault(dir, path) {
+  const later = `node oikos/tools/setup/cli.mjs mount add ${path} --use wiki --personal --dry-run`;
+  if (!existsSync(path)) console.log(`  note: ${path} does not exist yet — clone the vault there`);
+  try {
+    const result = changeMounts(dir, 'local', changeOf('add', path, { use: 'wiki' }));
+    showChange(result);
+    if (result.problems.length) {
+      console.log(`  note: the vault is not recorded as a mount — ${result.problems.join('; ')}. Once it is in place: ${later}`);
+      return;
+    }
+    writeFileAtomic(result.after, result.file);
+    console.log(`  wrote   ${result.label} (the vault, a personal wiki mount)`);
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    console.log(`  note: the vault is not recorded as a mount — ${e.message}. To add it: ${later}`);
+  }
+}
+
 const has = (cmd, args = ['--version']) => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
 
 const commands = {
@@ -205,7 +230,9 @@ const commands = {
       const major = Number(process.versions.node.split('.')[0]);
       row(major >= 22, 'Node.js ≥ 22', `found ${process.versions.node}`);
       row(has('git'), 'git');
-      row(has('npx'), 'npx (for the chrome-devtools MCP server)');
+      row(has('npx'), 'npx (for the akmon-browser MCP server)');
+      const akmonBrowser = akmonTools().browser;
+      row(existsSync(akmonBrowser), 'akmon browser tool', existsSync(akmonBrowser) ? '' : `run \`git submodule update --init --recursive\` in ${CORE_REAL}; the akmon pin may predate the browser tool`);
       row(existsSync(join(CORE_ROOT, 'node_modules', 'yaml')), 'oikos dependencies', existsSync(join(CORE_ROOT, 'node_modules', 'yaml')) ? '' : `run \`npm install\` in ${CORE_REAL}`);
 
       const dir = installRoot();
@@ -228,13 +255,14 @@ const commands = {
       const local = localConfig();
       row(!!local, '.local/AGENTS.md', local ? '' : 'run `init`');
       if (local) {
+        // A vault is a personal wiki mount (ADR 0007 D04), checked by its mount row below; only a
+        // line an older `init` wrote is still named, with the command that replaces it.
         const vault = local['obsidian vault'];
         const memory = local['personal memory'];
-        if (vault) row(existsSync(vault), 'vault clone', vault);
-        // The line is what notes used to be read from; a vault is a personal wiki mount now (ADR 0007 D04).
         if (vault && !conf.mounts.some((m) => m.root === realOf(vault))) {
+          row(existsSync(vault), 'vault clone', vault);
           console.log(`  --  the \`obsidian vault:\` line of .local/AGENTS.md is replaced by a personal wiki mount, which the vault connector uses: node oikos/tools/setup/cli.mjs mount add ${vault} --use wiki --personal --dry-run`);
-        }
+        } else if (vault) console.log('  ..  the `obsidian vault:` line of .local/AGENTS.md is no longer read — its vault is a mount; delete the line');
         if (memory) row(existsSync(memory), 'personal memory note', memory);
       }
       { const mcp = existsSync(join(dir, '.mcp.json')); row(mcp, '.mcp.json', mcp ? '' : 'run `node oikos/tools/sync/cli.mjs`'); }
@@ -283,7 +311,7 @@ const commands = {
   init: {
     help: 'make an installation in a folder [dir, default: the current one]: AGENTS.md, CLAUDE.md, oikos.yaml, '
       + 'resources/, LANDSCAPE.md, .gitignore, .local/ (AGENTS.md, .env), the oikos/ link, then sync '
-      + '(--org NAME, --email-domain DOMAIN, --vault PATH, --memory PATH default <vault>/agents/oikos.md, '
+      + '(--org NAME, --email-domain DOMAIN, --vault PATH (recorded as a personal wiki mount in .local/mounts.yaml), --memory PATH default <vault>/agents/oikos.md, '
       + '--jira-email EMAIL default the git email when it is in the email domain); never overwrites',
     options: { org: { type: 'string' }, 'email-domain': { type: 'string' }, vault: { type: 'string' }, memory: { type: 'string' }, 'jira-email': { type: 'string' } },
     async run(v, positionals) {
@@ -315,10 +343,10 @@ const commands = {
 
       const vault = v.vault ? resolve(v.vault) : null;
       const memory = v.memory ? resolve(v.memory) : vault ? join(vault, 'agents', 'oikos.md') : null;
-      if (create(dir, join('.local', 'AGENTS.md'), localAgentsTemplate({ vault, memory }))) {
-        if (vault && !existsSync(vault)) console.log(`  note: ${vault} does not exist yet — clone the vault there`);
+      if (create(dir, join('.local', 'AGENTS.md'), localAgentsTemplate({ memory }))) {
         if (memory && !existsSync(memory)) console.log(`  note: ${memory} does not exist yet — create it as a note`);
       }
+      if (vault) registerVault(dir, vault);
       const envFile = join(dir, '.local', '.env');
       create(dir, join('.local', '.env'), '# oikos credentials — git-ignored, mode 600. Fill with `node oikos/tools/setup/cli.mjs token`.\n', { mode: 0o600 });
       // The email domain was just given, so it is checked against that, not a configuration read before.

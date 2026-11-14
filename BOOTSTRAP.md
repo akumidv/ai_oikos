@@ -36,15 +36,18 @@ installation exists, the same is `node oikos/tools/setup/cli.mjs …` from its r
 in their language; everything written stays in English.
 
 1. **Prerequisites.** Node.js ≥ 22 and git; `npx` for the shared browser. Under WSL with a
-   Windows Chrome, Node.js is also needed on the Windows side (the chrome-devtools MCP server
+   Windows Chrome, Node.js is also needed on the Windows side (the browser's MCP server
    runs there). Missing Node.js → tell the user how to install it for their OS; do not install
    system packages yourself.
-2. **The core.** Clone into the folder the user chose (default `~/oikos`), then `npm install`
-   there; if it already holds an oikos clone, `git -C <oikos> pull --ff-only` instead. Never clone
-   into another project.
+2. **The core.** Clone **with its submodules** into the folder the user chose (default `~/oikos`):
+   `git clone --recurse-submodules <url> <oikos>`, then `npm install` there; if it already holds
+   an oikos clone, `git -C <oikos> pull --ff-only` and `git -C <oikos> submodule update --init --recursive`
+   instead. The shared browser is akmon's browser tool, which lives in the `_aitna/akmon`
+   submodule (ADR 0009); `setup status` says when it is missing. Never clone into another
+   project.
 3. **The installation.** Ask the user for its folder (one per organization or project, outside
    the core, e.g. `~/oikos-<organization>`), then
-   `node <oikos>/tools/setup/cli.mjs init <folder> --org "<name>" --email-domain <domain> [--vault <path>]`.
+   `node <oikos>/tools/setup/cli.mjs init <folder> --org "<name>" --email-domain <domain> [--vault <path>]` (a vault clone is recorded as a personal wiki mount in `.local/mounts.yaml`).
    It links `oikos/` to the core, writes `AGENTS.md`, `CLAUDE.md`, `oikos.yaml`, `LANDSCAPE.md`,
    `resources/`, `.gitignore` and `.local/` (`AGENTS.md`, `.env` with `JIRA_EMAIL` taken from the
    git email only when it is in the organization's domain — without `--email-domain` there is no
@@ -59,8 +62,8 @@ in their language; everything written stays in English.
      move a task between which statuses, and what a project's results are (the example in
      `oikos/examples/installation/oikos.yaml`; the shape in the tracker's connector file).
    - `AGENTS.md`: where the knowledge base is, where drafts and final documents go, the brand
-     skill for on-brand documents, the SSO. `.local/AGENTS.md`: this machine's paths (the vault,
-     the personal memory note) as `- key: value` lines.
+     skill for on-brand documents, the SSO. `.local/AGENTS.md`: this machine's paths (the
+     personal memory note) as `- key: value` lines.
    - `resources/<id>.md` (optional): one note per resource the organization has — what it is
      for, how it is reached (`via:` a skill or connector), sign-in.
      `node oikos/tools/landscape/cli.mjs resources` shows them; `node oikos/tools/sync/cli.mjs --check`
@@ -106,10 +109,27 @@ and browser (its own Chrome profile and DevTools port, `OIKOS_CHROME_PORT` in `o
 When a session starts in an installation that is not set up, the session-start hook says what is
 missing and points here.
 
+## Add a mount
+
+A mount is another repository the installation uses as a source of skills or notes
+([mounts](docs/design/mounts.md), [ADR 0007](docs/adr/0007-mounts.md)). oikos does not create one:
+the user clones it or adds it as a submodule first. From the installation's root, show the change
+first:
+
+```bash
+node oikos/tools/setup/cli.mjs mount add <path> --use wiki,skills --personal --dry-run
+```
+
+`--use` takes `wiki` (notes, through the `vault` connector), `skills`, or neither (read only);
+`--personal` writes `.local/mounts.yaml` and `--shared` the `mounts:` of `oikos.yaml` (exactly one of
+them); `--skills-only`, `--prefix`, `--wiki-name` and `--tracked-pointers` set the rest. After the
+user confirms the diff, run the same command without `--dry-run`, then `node oikos/tools/sync/cli.mjs`
+to wire the mount. A change that brings a problem is refused.
+
 ## Update
 
 ```bash
-git -C <oikos> pull --ff-only && npm --prefix <oikos> install
+git -C <oikos> pull --ff-only && git -C <oikos> submodule update --init --recursive && npm --prefix <oikos> install
 ```
 
 Then, in each installation: `node oikos/tools/sync/cli.mjs && node oikos/tools/sync/cli.mjs --check`,
@@ -118,8 +138,32 @@ servers again when sync reports `.mcp.json` changed (Set up, step 8). An install
 and `.local/` are untouched by an update; sync rewrites only oikos's own entries in the wiring, and
 moves a store of `.local/` still at an old place to its dot-named one (`google/` →
 `.secrets/google/`, `browser/` → `.browser/` — the browser profile only while its Chrome is
-stopped: `node oikos/tools/browser/cli.mjs stop`, then sync again).
+stopped: `node oikos/tools/browser/cli.mjs stop`, then sync again). The same sync, under the same
+condition, renames the profile `.browser/chrome-profile-project` to `chrome-profile-cft` and moves a
+Chrome for Testing that oikos installed into `.browser/chrome/chrome/`, where akmon's browser tool
+looks for it, and replaces the `chrome-devtools` MCP server it wrote with `akmon-browser` (and the
+read-only permissions it seeded with it): start a new session, reconnect the server, and for Qwen
+approve it again.
 `setup status` shows whether an update added something to set up.
+
+## Moving an installation
+
+Moving an installation's folder (the core may stay where it is or move with it) makes what holds the old folder's
+absolute paths go stale ([mounts](docs/design/mounts.md#moving-an-installation-found-while-the-first-installation-moved)).
+Then, from the new folder:
+
+1. Relink `oikos/` to the core (a symlink, or the submodule's path).
+2. Run `node oikos/tools/sync/cli.mjs`, then `node oikos/tools/sync/cli.mjs --check`.
+3. Move the host's per-project data by hand (Claude Code's `~/.claude/projects/<encoded path>/`),
+   and fix an editor workspace file outside the installation that names the old folder.
+4. Pin `OIKOS_CHROME_PORT` in `oikos.yaml` if something outside depends on the browser's port.
+5. Start a new session in the installation. For Qwen, run `qwen mcp approve --all` when `.mcp.json`
+   changed.
+
+`sync --check` reports each generated file that still names the old root (`.mcp.json`, the mount wiring in
+`.claude/settings.local.json` and in the mounts' own settings) and `sync` rewrites them; when the core moved too, the
+old core path that sync wrote into `additionalDirectories` is replaced by the new one (an entry you wrote stays); `.local/.browser/launch.json`
+is rewritten by the next browser `start`, not by sync.
 
 ## Remove
 

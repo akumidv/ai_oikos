@@ -31,7 +31,9 @@ Accepted commitments only. Alternatives and the rejected register:
 
 - **Choice.** Tokens stay in `.local/.env`. Credentials files go under `.local/.secrets/` (the
   Google OAuth client and token: `.local/.secrets/google/`). The shared browser's state — Chrome
-  profiles and `launch.json` — goes to `.local/.browser/`. A new secret or store a tool keeps is
+  profiles and `launch.json` — goes to `.local/.browser/` (the folder names inside it are akmon's
+  browser tool's since [ADR 0009](0009-browser-from-akmon.md): `chrome-profile`, `chrome-profile-cft`,
+  `chrome/`). A new secret or store a tool keeps is
   placed under a dot name; DEVELOPMENT.md says so.
 - **Rationale.** The browser profile is a store (cookies, sessions, cache), not a credential
   file: it is large, written by Chrome, and kept apart from `.secrets/`.

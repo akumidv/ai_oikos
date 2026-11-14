@@ -123,7 +123,7 @@ run from an installation or with `OIKOS_HOME`.
   folder, git's own pathspec `*` crossing `/`, and `NODE_OPTIONS` already in the host's environment (node has no flag
   to ignore it; the settings route is closed by `env`); audit 5 (D-AUDIT5-CORE-LINK, D-AUDIT5-GIT-C): the shell
   replacing, moving or removing the `oikos/` core link (`ln`, `mv`, `rm`), shell writers over settings (`cp`,
-  `sed -i`), and `git -c <key>=<value>` values that write (`core.pager=…`, L3); audit 6b (D-AUDIT6B-SHELL-MODEL, D-AUDIT6B-SHELL-SKILLS): a program written to a file and run (`sh f.sh`, `node f.mjs`) or fed to a shell through a pipe, `-s` or `<(…)`, and shell writes of skill, agent and command files — [ADR 0007](../docs/adr/0007-mounts.md) D02.
+  `sed -i`), and `git -c <key>=<value>` values that write (`core.pager=…`); audit 6b (D-AUDIT6B-SHELL-MODEL, D-AUDIT6B-SHELL-SKILLS): a program written to a file and run (`sh f.sh`, `node f.mjs`) or fed to a shell through a pipe, `-s` or `<(…)`, and shell writes of skill, agent and command files — [ADR 0007](../docs/adr/0007-mounts.md) D02.
 - L6 · Guard: nested installations and the search above the installation · deferred · A folder holding another installation is found only by a shallow search
   — accepted gap (owner): a folder that holds another installation but is not above this one is searched without that installation being detected beyond the nested-installation search (two levels, at most 100 folders; deeper nesting is not detected); `list_directory` of a parent folder lists names (it is not a search tool). A search scope above the installation is denied, with no exception for a mount — [ADR 0007](../docs/adr/0007-mounts.md) D01, D05; [design](../docs/design/mounts.md) D-S4-ANCESTOR.
 - F8 · Extension rules from the installation · active · No app or block names in the core's extension
@@ -138,6 +138,11 @@ run from an installation or with `OIKOS_HOME`.
   [skills/footprint/](../skills/footprint/SKILL.md) (scenarios `period-report`, `against-hours`),
   tool `tools/footprint/cli.mjs` (`sources`, `identify`, `collect`), the `cv` scenario
   [own-cv](../skills/cv/scenarios/own-cv.md), group `hr`.
+- F19 · Footprint extension 3: events, slices, sessions, meaning, releases, team · active · One collector of digital traces
+  — [ADR 0008](../docs/adr/0008-footprint-events.md) proposed (shape chosen by the owner 2026-11-14), [design](../docs/design/footprint.md):
+  store + `slice`, source `sessions` (Claude, Qwen, Codex), git meaning and decision documents, releases, issues closed,
+  uncommitted, first activity, source `team`, decision chain; acceptance against the installation's prototype; then the
+  installation's CV skill points at the core commands.
 - F10 · Write guard: false positives, direct HTTP writes · active · Reads by script position pass; `curl`/`wget`/`gh api` writes denied — done in code, tests green; left: commit.
 - F11 · Jira compact dry runs, `search --count` · active · Long texts as size, outline, diff; `--full`; approximate count — done in code, tests green; left: commit.
 - F12 · `jira attach` · active · Upload files through `localFile`, read back by id (F2's attach half) — done in code, tests green; left: commit.
@@ -190,3 +195,11 @@ run from an installation or with `OIKOS_HOME`.
   — not designed yet: a public-url submodule pinned to a commit, a `local` remote on this machine's core checkout (push off), objects
   via `--reference`/alternates; one update command (fetch from local, checkout, sync), the user commits the new pointer; risk: a pinned
   commit missing from origin lost after gc or rebase in the core. Later (not now): akmon attached to an installation through oikos (A10)
+
+## Test environment
+
+- C1 · The suite depends on where TMPDIR points · active · Green with a home-based TMPDIR too; the scratch rule stays strict · [detail](tasks/C1-npm-test-tmpdir.md)
+
+## Browser
+
+- C2 · Browser from akmon: re-pin after its release · active · Re-pin akmon after its release; drop the `OIKOS_CHROME_*` aliases · [ADR 0009](../docs/adr/0009-browser-from-akmon.md)

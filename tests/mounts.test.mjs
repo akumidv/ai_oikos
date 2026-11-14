@@ -107,7 +107,7 @@ test('sync wires the mounts, writes absolute paths only into local files, and a 
     [dev]: { installExcludes: rulesOf(dev), pointers: ['dev-deploy-status'], excludes: [`${dir}/CLAUDE.md`, `${dir}/CLAUDE.local.md`, `${dir}/projects/CLAUDE.md`, `${dir}/projects/CLAUDE.local.md`], created: true, ignored: ['/.claude/settings.local.json'] },
     [own]: { installDirs: [own] },
   });
-  assert.ok(readJson(join(dir, '.local', 'sync.json')).mcp.includes('chrome-devtools'), 'the MCP record is kept beside it');
+  assert.ok(readJson(join(dir, '.local', 'sync.json')).mcp.includes('akmon-browser'), 'the MCP record is kept beside it');
 
   // absolute paths of mounts stay out of what is committed: oikos.yaml, the shared settings, the pointers
   for (const committed of ['oikos.yaml', '.claude/settings.json', '.claude/skills/wiki/SKILL.md']) assert.ok(!readFileSync(join(dir, committed), 'utf8').includes(dir), committed);

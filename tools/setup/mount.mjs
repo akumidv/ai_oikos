@@ -20,13 +20,19 @@ function layerOf(v) {
 const ENTRY_OPTIONS = ['use', 'skills-only', 'prefix', 'wiki-name', 'tracked-pointers'];
 
 /** The change `verb` asks for on the mount `path`. */
-function changeOf(verb, path, v) {
+export function changeOf(verb, path, v) {
   if (verb === 'remove') {
     if (ENTRY_OPTIONS.some((option) => v[option] !== undefined)) throw new UsageError('mount remove takes only the path and the layer');
     return { remove: path };
   }
   const entry = mountEntry({ use: list(v.use), only: list(v['skills-only']), prefix: v.prefix, wikiName: v['wiki-name'], tracked: v['tracked-pointers'] });
   return { add: { path, entry } };
+}
+
+/** Print what `result` (from `changeMounts`) changes in its file: the unified diff, or that nothing changes. */
+export function showChange(result) {
+  const diff = unifiedDiff(result.before, result.after, { labels: [`${result.label} (current)`, `${result.label} (new)`] });
+  console.log(diff.length ? diff.join('\n') : `${result.label}: no change`);
 }
 
 /**
@@ -43,8 +49,7 @@ function runMount(v, positionals) {
   const layer = layerOf(v);
   const asked = changeOf(verb, path, v);
   const result = changeMounts(root, layer, asked);
-  const diff = unifiedDiff(result.before, result.after, { labels: [`${result.label} (current)`, `${result.label} (new)`] });
-  console.log(diff.length ? diff.join('\n') : `${result.label}: no change`);
+  showChange(result);
   if (result.problems.length) throw new UsageError(`nothing written — the change would bring problems:\n${result.problems.map((p) => `  ${p}`).join('\n')}`);
   if (v['dry-run']) {
     console.log(`dry run: nothing written. Run the same command without --dry-run, after the user confirms, to change ${result.label}; then \`node oikos/tools/sync/cli.mjs\`.`);

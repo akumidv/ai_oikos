@@ -161,6 +161,33 @@ export function goneRoots(mounts, recorded) {
   return isMap(recorded) ? Object.keys(recorded).filter((root) => !mounts.some((m) => m.root === root && isRepoTop(m.root))) : [];
 }
 
+/** Whether `text` names the folder `root` or a path below it (not a folder that only starts with the same letters). */
+export function namesRoot(text, root) {
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`${escaped}(?![\\w.-])`).test(text);
+}
+
+/**
+ * The record of an installation that has moved, carried to its new paths: every mount root below
+ * `from` (the root an earlier sync recorded) is kept under the same relative path below `install`,
+ * so what sync wrote for the old paths is owned, and replaced, as the same mount's wiring. A root
+ * outside `from` (an outside mount), one already below `install`, or one whose new key is taken stays.
+ * @param {Record<string, Wired>|undefined} recorded
+ * @param {string} install the installation's root now
+ * @param {string|null|undefined} from the installation's root when the record was written
+ * @returns {Record<string, Wired>|undefined}
+ */
+export function carriedRecord(recorded, install, from) {
+  if (!from || !isMap(recorded)) return recorded;
+  const below = (root, folder) => root === folder || root.startsWith(`${folder}${sep}`);
+  const next = {};
+  for (const [root, wired] of Object.entries(recorded)) {
+    const target = below(root, from) && !below(root, install) ? join(install, relative(from, root)) : root;
+    next[target !== root && target in recorded ? root : target] = wired;
+  }
+  return next;
+}
+
 /** What a record says sync wired for one mount, in words: `3 claudeMdExcludes entries in … ; the pointers a, b`. */
 export function describeWiring(root, record = {}) {
   const count = (list, one, many) => (list?.length ? [`${list.length} ${list.length === 1 ? one : many}`] : []);
@@ -334,12 +361,14 @@ function wireActive(out, install, wired, pointers, { recorded, owned }) {
  * its wiring in words, unless `prune` is set: then it is taken away. Nothing is written here.
  * @param {string} install the installation's root
  * @param {object[]} mounts the resolved mounts (tools/common/mounts.mjs)
- * @param {Record<string, Wired>} recorded
+ * @param {Record<string, Wired>} recordedBefore
  * @param {import('./pointers.mjs').MountPointer[]} pointers
- * @param {{prune?: boolean}} [options]
+ * @param {{prune?: boolean, movedFrom?: string|null}} [options] `movedFrom`: the installation's root
+ *   when `recordedBefore` was written, if it was another one — the record is carried to the new paths (carriedRecord)
  * @returns {{edits: Edit[], record: Record<string, Wired>, problems: string[], pending: {root: string, wiring: string}[]}}
  */
-export function wireMounts(install, mounts, recorded = {}, pointers = [], { prune = false } = {}) {
+export function wireMounts(install, mounts, recordedBefore = {}, pointers = [], { prune = false, movedFrom = null } = {}) {
+  const recorded = carriedRecord(recordedBefore, realpathSync(install), movedFrom);
   const gone = goneRoots(mounts, recorded);
   const { pending, owned } = keptWiring(recorded, gone, prune);
   const wired = mounts.filter((m) => isRepoTop(m.root));

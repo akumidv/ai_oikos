@@ -33,6 +33,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/_aitna/akmon/js/hooks/codex-hook.mjs\" work-style",
+            "statusMessage": "Checking for a work-style switch"
+          }
+        ]
+      }
     ]
   }
 }
