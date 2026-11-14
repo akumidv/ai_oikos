@@ -160,10 +160,10 @@ test('buildReport: a review counts once per pull request and day, with its lines
 
 test('renderMarkdown: By week per place, the hours beside all places', () => {
   const week = section(markdown(report()), '## By week');
-  assert.match(week, /^### ACME Corp\n\n\| Week of \| Active days \| Span h, mean \| Actions \| Commits \| Code\+tests \+ \| Docs \+ \| Jira actions \| Reviews \| Reviewed lines \|$/m);
-  assert.match(week, /^\| 2026-03-02 \| 4 \| 7 \| 12 \| 3 \| \+160 \| \+205 \| 4 \| 2 \| \+600 −80 \|$/m);
+  assert.match(week, /^### ACME Corp\n\n\| Week of \| Active days \| Span h, mean \| Actions \| Commits \| Code\+tests \+ \| Docs \+ \| Other \+ \| Jira actions \| Reviews \| Reviewed lines \|$/m);
+  assert.match(week, /^\| 2026-03-02 \| 4 \| 7 \| 12 \| 3 \| \+160 \| \+205 \| \+0 \| 4 \| 2 \| \+600 −80 \|$/m);
   assert.match(week, /^### all places\n\n\| Week of .* \| Reviewed lines \| sheet h \|$/m);
-  assert.match(week, /^\| 2026-03-02 \| 5 \| 11 \| 14 \| 5 \| \+210 \| \+205 \| 4 \| 2 \| \+600 −80 \| 8 \|$/m);
+  assert.match(week, /^\| 2026-03-02 \| 5 \| 11 \| 14 \| 5 \| \+210 \| \+205 \| \+0 \| 4 \| 2 \| \+600 −80 \| 8 \|$/m);
 });
 
 test('renderMarkdown: What changed per place — repositories with their three largest commits, Jira by project, issues, reviewed', () => {
@@ -171,11 +171,11 @@ test('renderMarkdown: What changed per place — repositories with their three l
   assert.deepEqual(placeOf(r, 'ACME Corp').changed.repositories.map((x) => [x.repository, x.commits, x.days, x.largest]),
     [['lib', 1, 1, ['Docs']], ['app', 2, 1, ['Add login', 'Fix login']]]);
   const changed = section(markdown(r), '## What changed');
-  assert.match(changed, /^### ACME Corp\n\n\| Repository \| Commits \| Days \| Code\+tests \| Docs \| Largest commits \|\n\|---\|---\|---\|---\|---\|---\|\n\| lib \| 1 \| 1 \| \+0 −0 \| \+200 −0 \| Docs \|\n\| app \| 2 \| 1 \| \+160 −12 \| \+5 −0 \| Add login; Fix login \|$/m);
+  assert.match(changed, /^### ACME Corp\n\n\| Repository \| Commits \| Days \| Code\+tests \| Docs \| Other \| Largest commits \|\n\|---\|---\|---\|---\|---\|---\|---\|\n\| lib \| 1 \| 1 \| \+0 −0 \| \+200 −0 \| \+0 −0 \| Docs \|\n\| app \| 2 \| 1 \| \+160 −12 \| \+5 −0 \| \+0 −0 \| Add login; Fix login \|$/m);
   assert.match(changed, /^Jira actions by project: PROJ 4\.$/m);
   assert.match(changed, /^\| PROJ-1 \| 2 \| created 1, status 1 \| Login page \|$/m);
   assert.match(changed, /^\| acme\/web \| 2 \| \+600 −80 \|$/m);
-  assert.match(changed, /^### personal\n\n\| Repository .*\n.*\n\| ada-tools \| 2 \| 2 \| \+50 −5 \| \+0 −0 \| Weekend; Night fix \|$/m);
+  assert.match(changed, /^### personal\n\n\| Repository .*\n.*\n\| ada-tools \| 2 \| 2 \| \+50 −5 \| \+0 −0 \| \+0 −0 \| Weekend; Night fix \|$/m);
   const big = buildReport([{
     source: 'git', label: 'git', totals: [], notes: [],
     events: [10, 40, 20, 30].map((n, i) => ({ at: `2026-03-02T1${i}:00:00Z`, kind: 'commit', what: `app: Change ${n}`, lines: lines([n, 0], [0, 0], [0, 0]) })),
@@ -283,6 +283,10 @@ test('buildReport: a code host\'s commit is matched by its site — an Enterpris
   assert.equal(actions('https://ghe.example.com'), 0);
   assert.equal(actions('https://github.com'), 1);
   assert.equal(actions(undefined), 1);
+  // A stored source read at several sites (`sites`, from a slice) matches a commit at any of them.
+  const stored = (sites) => buildReport([git, { source: 'github', label: 'GitHub', sites, totals: [], notes: [], events: [commit] }], PERIOD).all.measures.totals.actions;
+  assert.equal(stored(['https://github.com', 'https://ghe.example.com']), 0);
+  assert.equal(stored(['https://github.com']), 1);
 });
 
 test('renderMarkdown: a place the settings name with no event at all says it has no action, as one with events but no action', () => {
@@ -314,8 +318,8 @@ test('renderMarkdown: By week shows 0 and +0 for a week with nothing of a kind; 
     ],
   }, { source: 'jira', label: 'Jira', totals: [], notes: [], events: [] }], { ...PERIOD, since: '2026-03-02', until: '2026-03-15' });
   const week = section(renderMarkdown(r, { person: 'Ada', collectedAt: 'now' }), '## By week');
-  assert.match(week, /^\| 2026-03-02 \| 1 \| 1 \| 2 \| 2 \| \+5 \| \+0 \| 0 \|$/m);
-  assert.match(week, /^\| 2026-03-09 \| 0 \| {2}\| 0 \| 0 \| \+0 \| \+0 \| 0 \|$/m);
+  assert.match(week, /^\| 2026-03-02 \| 1 \| 1 \| 2 \| 2 \| \+5 \| \+0 \| \+0 \| 0 \|$/m);
+  assert.match(week, /^\| 2026-03-09 \| 0 \| {2}\| 0 \| 0 \| \+0 \| \+0 \| \+0 \| 0 \|$/m);
   assert.deepEqual(r.all.changed.repositories[0].largest, ['Real work']);
 });
 
@@ -359,4 +363,16 @@ test('renderMarkdown: without settings every event is in one place, a day begins
   for (const heading of ['## Per day, by place', '## Calendar', '## By week', '## What changed', '## By day', '## Totals', '## Notes']) assert.match(md, new RegExp(`^${heading}$`, 'm'));
   const empty = renderMarkdown(buildReport([{ source: 'x', label: 'X', totals: [], events: [], notes: [] }], PERIOD), { person: 'Ada', collectedAt: 'now' });
   assert.match(empty, /^No action in the period\.$/m);
+});
+
+test('buildReport: other lines (config and data) are a fourth kind in the per-day row, By week and What changed', () => {
+  const r = buildReport([{
+    source: 'git', label: 'git', totals: [], notes: [],
+    events: [{ at: '2026-03-02T10:00:00Z', kind: 'commit', what: 'app: Config', where: '/src/app', lines: { code: [1, 0], tests: [0, 0], docs: [0, 0], other: [30, 4] } }],
+  }], PERIOD);
+  assert.deepEqual(r.all.measures.totals.lines.other, [30, 4]);
+  const md = markdown(r);
+  assert.match(section(md, '## Per day, by place'), /^\| Other lines \+\/− \| \+30 \/ −4 \|$/m);
+  assert.match(section(md, '## By week'), /^\| Week of \| .* \| Docs \+ \| Other \+ \|\n.*\n\| 2026-03-02 \| 1 \| {2}\| 1 \| 1 \| \+1 \| \+0 \| \+30 \|$/m);
+  assert.match(section(md, '## What changed'), /^\| app \| 1 \| 1 \| \+1 −0 \| \+0 −0 \| \+30 −4 \| Config \|$/m);
 });

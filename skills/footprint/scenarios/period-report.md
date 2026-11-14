@@ -44,6 +44,18 @@ resources. The result is one markdown report, read for the user and saved to the
 
    Add the sources without code (the skill, § Sources without code) as their own sections, when
    the purpose needs them and their connectors are available.
+
+   **Several windows** (a quarter and its months, the last four weeks, a year by quarter): collect
+   once over the whole period, then slice it — the crawl is not repeated per window:
+
+   ```bash
+   node oikos/tools/footprint/cli.mjs slice --until 2026-09-30 --window 2026-07-01 --window 2026-08-01 --window 14 --out .local/footprint/reports
+   ```
+
+   Each `--window` is a start date through `--until`, or a number of days ending at `--until`
+   (`--window 14`). `--out <dir>` writes one file per window. The Notes of each window name the
+   days no crawl covered; collect the missing days and slice again. Sessions and the facts
+   sections are read the same way (the skill, § The store and `slice`).
 5. **Read it for the user.** Not a recital of the tables:
    - **the calendar** — the usual start and end of a working day (the median first and last
      action), the weekends with work, how the work splits by place (the organization's against a

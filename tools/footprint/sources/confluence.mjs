@@ -139,6 +139,9 @@ export async function collectConfluence(wiki, { who, me, jira = null, since, unt
   // saved what when.
   const contributed = await search(wiki, `${kinds} AND contributor = "${id}" AND lastmodified >= "${first}"`, 'space,version');
   const notes = [];
+  const partial = [];
+  if (found.more) partial.push(`created pages cut at ${RESULT_CAP}`);
+  if (contributed.more) partial.push(`pages contributed to cut at ${RESULT_CAP}`);
   if (found.more) notes.push(`created pages cut at ${RESULT_CAP}`);
   if (contributed.more) notes.push(`pages contributed to cut at ${RESULT_CAP}: the edits are a lower bound`);
   const period = { since, until, tz, dayStartsMin };
@@ -182,6 +185,7 @@ export async function collectConfluence(wiki, { who, me, jira = null, since, unt
     for (const v of own) events.push(event(page, v.when, 'page edited'));
   });
   events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.what.localeCompare(b.what));
+  if (unread) partial.push(`the versions of ${unread} page(s) could not be read`);
   if (unread) notes.push(`the versions of ${unread} page(s) could not be read: only their latest change is counted, where it is the person's`);
   notes.push(
     'an edit is a version the person saved in the period (version 1 is the creation, not an edit); the pages looked into are those they ever contributed to '
@@ -193,6 +197,7 @@ export async function collectConfluence(wiki, { who, me, jira = null, since, unt
   return {
     source: 'confluence',
     label: `Confluence ${id}`,
+    ...(partial.length ? { partial: true, partialReasons: partial } : {}),
     totals: [
       ['pages created', created.length],
       ['words in them', words],

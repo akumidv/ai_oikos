@@ -201,10 +201,12 @@ export async function collectGitlab(g, { username, me, since, until, tz, dayStar
   const period = { since, until, tz, dayStartsMin };
   const user = await userOf(g, { username, me });
   const notes = [];
+  const partial = [];
   // `after` and `before` are dates in UTC and exclusive: a day of slack on each side (more than any
   // offset and day_starts), and the events are kept by their working day in --tz.
   const q = new URLSearchParams({ after: addDays(since, -2), before: addDays(until, 2), sort: 'asc' });
   const all = await g.paged(`/users/${user.id}/events?${q}`, EVENT_CAP + 1);
+  if (all.length > EVENT_CAP) partial.push(`events cut at ${EVENT_CAP}`);
   if (all.length > EVENT_CAP) notes.push(`events cut at ${EVENT_CAP}: the totals, days and breakdown cover the first ${EVENT_CAP} of the period`);
   const { from, to } = periodBounds(period);
   const raw = all.slice(0, EVENT_CAP).filter((e) => inWorkingPeriod(e.created_at, period));
@@ -279,6 +281,7 @@ export async function collectGitlab(g, { username, me, since, until, tz, dayStar
   const reviewed = await mergeRequestCount(g, { ...created, reviewer_username: user.username });
   if (authored === null || reviewed === null) notes.push('GitLab left out a merge request total (it does above 10 000): shown as unknown');
   const unread = [...mrs.values()].filter((m) => !m.read).length;
+  if (unread) partial.push(`${unread} merge request(s) could not be read`);
   if (unread) notes.push(`${unread} merge request(s) the person approved, merged or commented on could not be read (deleted, or no access): not counted as anyone's`);
   if (collapsed.mrs) notes.push(`${collapsed.files} file(s) in ${collapsed.mrs} merge request(s) have a diff GitLab does not show (too large or collapsed): the reviewed volume is a lower bound`);
   if (collapsed.cut) notes.push(`the diff of ${collapsed.cut} merge request(s) read up to ${DIFF_FILE_CAP} files: the reviewed volume is a lower bound`);
@@ -296,6 +299,7 @@ export async function collectGitlab(g, { username, me, since, until, tz, dayStar
     label: `GitLab @${user.username}`,
     // The site's base URL: a project is `<site>/<path>` (none when the client does not say).
     site: g.base || null,
+    ...(partial.length ? { partial: true, partialReasons: partial } : {}),
     totals: [
       ['events', raw.length],
       ['commits pushed', commits],

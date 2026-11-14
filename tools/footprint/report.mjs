@@ -6,12 +6,17 @@
 import { readFileSync } from 'node:fs';
 import { basename, dirname, extname, resolve } from 'node:path';
 import { UsageError } from '../common/cli.mjs';
+import { DAY_MINUTES, addDays, daysOf, localParts, weekOf, workingDay } from './days.mjs';
+import { renderFacts, summarizeFacts } from './facts.mjs';
+import { plusMinusTight, short, table } from './markdown.mjs';
+import { LINE_KINDS } from './meaning.mjs';
 
-const DAY_MS = 86_400_000;
+// The date helpers live in days.mjs (the fact sections use them too); the sources import them from here.
+export { addDays, daysOf, localParts, weekOf, workingDay };
+
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 /** Above this many days the day table is left out unless `--by day` asks for it. */
 const DAY_TABLE_MAX = 31;
-const DAY_MINUTES = 1440;
 /** The place of every event when the report has no settings; the column of all places. */
 const ONE_PLACE = 'all';
 const ALL_PLACES = 'all places';
@@ -27,8 +32,6 @@ const REVIEW_KINDS = new Set(['review', 'review comment', 'merge', 'mr approved'
  * action here (one commit is counted once), and stays in its source's totals (`isCommitCopy`).
  */
 const COMMIT_COPIES = { github: 'commit', gitlab: 'push' };
-/** The kinds of a commit's lines (generated and pipeline lines are not in an event). */
-const LINE_KINDS = ['code', 'tests', 'docs'];
 /** How much of a place's content each table shows. */
 const LARGEST_COMMITS = 3;
 const TOP_ISSUES = 10;
@@ -62,39 +65,6 @@ export function isoDate(value, option) {
   return value;
 }
 
-/**
- * The date `n` days after `date`.
- *
- * @param {string} date `YYYY-MM-DD`
- * @param {number} n days, negative for before
- * @returns {string} `YYYY-MM-DD`
- */
-export const addDays = (date, n) => new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
-
-/**
- * Every date of a period.
- *
- * @param {string} since the first date, `YYYY-MM-DD`
- * @param {string} until the last date, included
- * @returns {string[]} the dates in order
- */
-export function daysOf(since, until) {
-  const days = [];
-  for (let d = since; d <= until; d = addDays(d, 1)) days.push(d);
-  return days;
-}
-
-/**
- * The Monday of the week of `date`.
- *
- * @param {string} date `YYYY-MM-DD`
- * @returns {string} `YYYY-MM-DD`
- */
-export function weekOf(date) {
-  const wd = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
-  return addDays(date, -wd);
-}
-
 /** 0 for a Monday … 6 for a Sunday. */
 const weekdayIndex = (date) => (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
 const weekday = (date) => WEEKDAYS[weekdayIndex(date)];
@@ -114,39 +84,6 @@ export function timeZone(tz) {
     throw new UsageError(`--tz is not a time zone: ${zone} (an IANA name such as Europe/Zurich)`);
   }
   return zone;
-}
-
-/**
- * The local date and time of an instant.
- *
- * @param {number|string|Date} instant ms, an ISO string or a Date
- * @param {string} tz an IANA time zone
- * @returns {{ date: string, time: string }} `YYYY-MM-DD` and `HH:MM` in `tz`
- * @throws {RangeError} when `instant` is not a valid time
- */
-export function localParts(instant, tz) {
-  const f = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  });
-  const p = Object.fromEntries(f.formatToParts(new Date(instant)).map((x) => [x.type, x.value]));
-  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
-}
-
-/**
- * The working day of an instant and its minute in that day: a working day begins at `startMin`
- * past local midnight, so an action before it belongs to the day before, at a minute of 1440 or
- * more (shown `01:30+1`). With `startMin` 0 it is the local date and time.
- *
- * @param {number|string|Date} instant ms, an ISO string or a Date
- * @param {string} tz an IANA time zone
- * @param {number} [startMin] minutes past midnight at which a working day begins, 0–1439
- * @returns {{ date: string, minute: number }} `YYYY-MM-DD` and the minute since that date's midnight
- * @throws {RangeError} when `instant` is not a valid time
- */
-export function workingDay(instant, tz, startMin = 0) {
-  const { date, time } = localParts(instant, tz);
-  const minute = Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
-  return minute < startMin ? { date: addDays(date, -1), minute: minute + DAY_MINUTES } : { date, minute };
 }
 
 /** A minute of a working day as `HH:MM`, with `+1` past midnight; empty for none. */
@@ -266,11 +203,6 @@ export function readTimesheets(files) {
 
 const round = (h) => Math.round(h * 10) / 10;
 const cell = (v) => (v === undefined || v === null || v === 0 ? '' : String(v));
-const table = (header, rows) => [
-  `| ${header.join(' | ')} |`,
-  `|${header.map(() => '---').join('|')}|`,
-  ...rows.map((r) => `| ${r.map((c) => String(c ?? '').replace(/\|/g, '\\|')).join(' | ')} |`),
-];
 const bump = (map, key, n = 1) => map.set(key, (map.get(key) || 0) + n);
 const total = (values) => values.reduce((a, b) => a + b, 0);
 
@@ -358,6 +290,7 @@ class PlaceLedger {
       k.actions += n;
       this.#kinds.set(`${source} ${kind}`, k);
     }
+    if (source === 'sessions' && kind === 'message') day.messages += n;
     if (source === 'git' && kind === 'commit') this.#commit(day, e, n);
     if (source === 'jira') this.#jira(day, e, kind || 'action', n);
     if (e.reviewed || (e.others === true && REVIEW_KINDS.has(kind))) this.#review(day, e);
@@ -378,7 +311,7 @@ class PlaceLedger {
   #day(date) {
     if (!this.#days.has(date)) {
       this.#days.set(date, {
-        date, first: null, last: null, actions: 0, timed: 0, bySource: {}, commits: 0,
+        date, first: null, last: null, actions: 0, timed: 0, bySource: {}, commits: 0, messages: 0,
         lines: Object.fromEntries(LINE_KINDS.map((k) => [k, [0, 0]])), jira: {}, reviews: 0, reviewed: [0, 0],
         repositories: new Map(), issues: new Map(),
       });
@@ -391,13 +324,15 @@ class PlaceLedger {
     const lines = linesOf(e);
     day.commits += n;
     for (const k of LINE_KINDS) { day.lines[k][0] += lines[k][0]; day.lines[k][1] += lines[k][1]; }
-    const r = this.#repositories.get(repository) || { repository, commits: 0, days: new Set(), codeTests: [0, 0], docs: [0, 0], subjects: [] };
+    const r = this.#repositories.get(repository) || { repository, commits: 0, days: new Set(), codeTests: [0, 0], docs: [0, 0], other: [0, 0], subjects: [] };
     r.commits += n;
     r.days.add(day.date);
     r.codeTests[0] += lines.code[0] + lines.tests[0];
     r.codeTests[1] += lines.code[1] + lines.tests[1];
     r.docs[0] += lines.docs[0];
     r.docs[1] += lines.docs[1];
+    r.other[0] += lines.other[0];
+    r.other[1] += lines.other[1];
     // A commit without lines (a pipeline repository's, a binary file's) is no largest commit.
     if (subject && added(lines) + deleted(lines) > 0) r.subjects.push({ subject, added: added(lines) });
     this.#repositories.set(repository, r);
@@ -468,9 +403,9 @@ class PlaceLedger {
     const desc = (f) => (a, b) => f(b) - f(a);
     return {
       repositories: [...this.#repositories.values()].map((r) => ({
-        repository: r.repository, commits: r.commits, days: r.days.size, codeTests: r.codeTests, docs: r.docs,
+        repository: r.repository, commits: r.commits, days: r.days.size, codeTests: r.codeTests, docs: r.docs, other: r.other,
         largest: [...r.subjects].sort(desc((s) => s.added)).slice(0, LARGEST_COMMITS).map((s) => s.subject),
-      })).sort(desc((r) => r.codeTests[0] + r.docs[0])),
+      })).sort(desc((r) => r.codeTests[0] + r.docs[0] + r.other[0])),
       jiraProjects: [...this.#projects].map(([project, actions]) => ({ project, actions })).sort(desc((p) => p.actions)),
       issues: [...this.#issues.values()].sort(desc((i) => i.actions)),
       reviewed: [...this.#reviewed.values()].sort(desc((r) => r.reviews)),
@@ -515,6 +450,7 @@ function measuresOf(days, workdays) {
     perActiveDay: {
       actions: per((d) => d.actions), commits: per((d) => d.commits), codeTestsAdded: per(codeTestsAdded),
       docsAdded: per((d) => d.lines.docs[0]), jiraActions: per(jiraActions), reviews: per((d) => d.reviews),
+      messages: per((d) => d.messages),
     },
     perWorkday: workdays ? {
       actions: sum((d) => d.actions) / workdays, commits: sum((d) => d.commits) / workdays, codeTestsAdded: sum(codeTestsAdded) / workdays,
@@ -522,6 +458,7 @@ function measuresOf(days, workdays) {
     totals: {
       actions: sum((d) => d.actions),
       commits: sum((d) => d.commits),
+      messages: sum((d) => d.messages),
       lines: Object.fromEntries(LINE_KINDS.map((k) => [k, [sum((d) => d.lines[k][0]), sum((d) => d.lines[k][1])]])),
       jira,
       jiraActions: sum(jiraActions),
@@ -543,6 +480,8 @@ function weekOfDays(week, days) {
     commits: sum((d) => d.commits),
     codeTestsAdded: sum(codeTestsAdded),
     docsAdded: sum((d) => d.lines.docs[0]),
+    otherAdded: sum((d) => d.lines.other[0]),
+    messages: sum((d) => d.messages),
     jiraActions: sum(jiraActions),
     reviews: sum((d) => d.reviews),
     reviewed: [sum((d) => d.reviewed[0]), sum((d) => d.reviewed[1])],
@@ -578,14 +517,15 @@ function siteOf(url) {
  * the git result's `remotes`). One in a repository git did not read is an action, as without git.
  *
  * @param {object} e the event
- * @param {{ source: string, site?: string|null }} r its source's result
+ * @param {{ source: string, site?: string|null, sites?: string[] }} r its source's result; `sites` are
+ *   the several sites a stored source was crawled at (a slice), tried as well as `site`
  * @param {Set<string>} gitRemotes the remote identities git read (empty when git did not run)
  * @returns {boolean}
  */
 function isCommitCopy(e, r, gitRemotes) {
-  if (!COMMIT_COPIES[r.source] || kindOf(r.source, e) !== COMMIT_COPIES[r.source]) return false;
-  const site = siteOf(r.site);
-  return Boolean(site && e.where) && gitRemotes.has(`${site}/${e.where}`.toLowerCase().replace(/\/+$/, ''));
+  if (!COMMIT_COPIES[r.source] || kindOf(r.source, e) !== COMMIT_COPIES[r.source] || !e.where) return false;
+  const where = String(e.where).toLowerCase().replace(/\/+$/, '');
+  return [r.site, ...(r.sites || [])].map(siteOf).some((site) => Boolean(site) && gitRemotes.has(`${site}/${where}`));
 }
 
 /** The settings as the report shows them: plain data, without `placeOf`. */
@@ -596,6 +536,20 @@ const settingsShown = (settings, startMin) => ({
   dayStarts: clock(startMin),
 });
 
+/** The days of the period grouped into weeks: active days, actions by source and hours per week. */
+function weeksOfPeriod(days) {
+  const weeks = new Map();
+  for (const day of days.values()) {
+    const key = weekOf(day.date);
+    const w = weeks.get(key) || { week: key, activeDays: 0, bySource: {}, hours: {} };
+    if (Object.keys(day.bySource).length) w.activeDays += 1;
+    for (const [s, n] of Object.entries(day.bySource)) w.bySource[s] = (w.bySource[s] || 0) + n;
+    for (const [l, h] of Object.entries(day.hours)) w.hours[l] = round((w.hours[l] || 0) + h);
+    weeks.set(key, w);
+  }
+  return [...weeks.values()];
+}
+
 /**
  * Lay the sources' events on the working days of the period, per place and for all places. An
  * event whose time cannot be read, or that has neither a time nor a date, is left out and counted in
@@ -603,20 +557,29 @@ const settingsShown = (settings, startMin) => ({
  * first and last action. A code host's copy of a commit (a GitHub commit, a GitLab push:
  * COMMIT_COPIES) in a repository git read (`isCommitCopy`) is no action — one commit is counted
  * once — and stays in its source's totals. Every place the settings name has its ledger, events or
- * not. Hours (worklogs, timesheets) stay on their calendar dates.
+ * not. Hours (worklogs, timesheets) stay on their calendar dates. A fact (`action: false`) never
+ * enters the days, the first and last action, the calendar or the weeks: it is gathered, with its
+ * source, into `facts` (facts.mjs `summarizeFacts`); the stored `hours` facts are ignored there.
  *
  * @param {object[]} results what each source returned: { source, label, totals, events, hours?,
- *   breakdown?, notes, remotes? (git), site? (a code host) } or { source, skipped }
- * @param {{ since: string, until: string, tz: string, timesheets?: object[], settings?: object|null, today?: string }} period
+ *   breakdown?, notes, remotes? (git), site? (a code host), sites? (a code host read back from the
+ *   store: every site it was crawled at) } or { source, skipped }
+ * @param {{ since: string, until: string, tz: string, timesheets?: object[], settings?: object|null, today?: string,
+ *   history?: object[]|null, factSettings?: { readingReference?: object|null, teamRule?: string|null } }} period
  *   `settings` from `footprintSettings` (places.mjs): `placeOf(where)`, `dayStartsMin`, `rules`,
  *   `defaultPlace`, `file`; without it every event is in one place and a day begins at midnight;
- *   `today` the date in `tz` the report is made on (default now), for the note on a day still running
+ *   `today` the date in `tz` the report is made on (default now), for the note on a day still running;
+ *   `history` every stored event (each with its `source`), where the decision chain looks for links
+ *   beyond the window (null: the events of `results`); `factSettings` the user's `readingReference`
+ *   `{ label, words }` and `teamRule` text for the fact sections
  * @returns {object} the report object, plain data: per day and per week by source with the hours
  *   (`days`, `weeks`), per place (`places`) and for all places (`all`) the measures, days, weeks
- *   and what changed, the report's own `notes`; a breakdown carries its rows' `places`, not the text
- *   they were matched on
+ *   and what changed, the fact sections' data (`facts`), the report's own `notes`; a breakdown
+ *   carries its rows' `places`, not the text they were matched on
  */
-export function buildReport(results, { since, until, tz, timesheets = [], settings = null, today = localParts(Date.now(), tz).date }) {
+export function buildReport(results, {
+  since, until, tz, timesheets = [], settings = null, today = localParts(Date.now(), tz).date, history = null, factSettings = {},
+}) {
   const ran = results.filter((r) => !r.skipped);
   const gitRemotes = new Set(ran.filter((r) => r.source === 'git').flatMap((r) => r.remotes || []));
   const placeOf = settings?.placeOf ? (where) => settings.placeOf(where) : () => ONE_PLACE;
@@ -631,15 +594,24 @@ export function buildReport(results, { since, until, tz, timesheets = [], settin
   const unreadable = new Map();
   const undated = new Map();
   const copies = new Map();
+  // What the fact sections read: facts (action === false, but not the stored hours) and the actions
+  // that are not a code host's copy of a commit, each with its source; summarizeFacts picks the window.
+  const factEvents = [];
   for (const r of ran) {
     for (const e of r.events) {
+      if (e.action === false) {
+        if (e.kind !== 'hours') factEvents.push({ ...e, source: r.source });
+        continue;
+      }
       const at = e.at ? Date.parse(e.at) : null;
       if (Number.isNaN(at) || (at === null && !e.date)) { bump(unreadable, r.source); continue; }
       const { date, minute } = at === null ? { date: e.date, minute: null } : workingDay(at, tz, startMin);
+      const copy = isCommitCopy(e, r, gitRemotes);
+      if (!copy) factEvents.push({ ...e, source: r.source });
       if (!days.has(date)) continue;
       const place = placeOf(e.where);
       if (!ledgers.has(place)) ledgers.set(place, new PlaceLedger(place));
-      if (isCommitCopy(e, r, gitRemotes)) {
+      if (copy) {
         bump(copies, r.source, e.count ?? 1);
         for (const ledger of [ledgers.get(place), all]) ledger.aside(e, { source: r.source });
         continue;
@@ -662,15 +634,6 @@ export function buildReport(results, { since, until, tz, timesheets = [], settin
     ...(copies.has(r.source) ? [`${copies.get(r.source)} ${COMMIT_COPIES[r.source]} event(s) left out of the actions and of the first and last action: `
       + 'they are in repositories git read, and one commit is counted once (they stay in the totals here)'] : []),
   ];
-  const weeks = new Map();
-  for (const day of days.values()) {
-    const key = weekOf(day.date);
-    const w = weeks.get(key) || { week: key, activeDays: 0, bySource: {}, hours: {} };
-    if (Object.keys(day.bySource).length) w.activeDays += 1;
-    for (const [s, n] of Object.entries(day.bySource)) w.bySource[s] = (w.bySource[s] || 0) + n;
-    for (const [l, h] of Object.entries(day.hours)) w.hours[l] = round((w.hours[l] || 0) + h);
-    weeks.set(key, w);
-  }
   return {
     since, until, tz,
     settings: settings ? settingsShown(settings, startMin) : null,
@@ -684,22 +647,19 @@ export function buildReport(results, { since, until, tz, timesheets = [], settin
     skipped: results.filter((r) => r.skipped).map((r) => ({ source: r.source, reason: r.skipped })),
     hourLabels,
     days: [...days.values()],
-    weeks: [...weeks.values()],
+    weeks: weeksOfPeriod(days),
     activeDays: [...days.values()].filter((d) => Object.keys(d.bySource).length).length,
     workdays: period.workdays,
     places,
     all: allPlaces,
+    facts: summarizeFacts(factEvents, { since, until, tz, dayStartsMin: startMin, placeOf, history, ...factSettings }),
   };
 }
 
 const r1 = (x) => (x === null || x === undefined ? '' : String(Math.round(x * 10) / 10));
 const r0 = (x) => (x === null || x === undefined ? '' : String(Math.round(x)));
-/** A count of lines, short: 950, 1.2k, 15k. */
-const short = (n) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const pair = (s) => (s.median === null ? '' : `${r1(s.median)} · ${r1(s.mean)}`);
 const plusMinus = ([a, d]) => `+${short(a)} / −${short(d)}`;
-/** Lines added and deleted, a zero shown as `+0` / `−0` (an empty cell would read as not known). */
-const plusMinusTight = ([a, d]) => `+${short(a)} −${short(d)}`;
 
 /** The places a table has a column or a section for: each place, and all places when there are two or more. */
 function placesShown(report) {
@@ -710,7 +670,9 @@ function placesShown(report) {
 /** Which measures the sources that ran can give: commits and lines (git), Jira actions, reviews (a code host), GitLab pushes. */
 const measuresRan = (report) => {
   const ran = new Set(report.sources.map((s) => s.source));
-  return { git: ran.has('git'), jira: ran.has('jira'), reviews: ran.has('github') || ran.has('gitlab'), gitlab: ran.has('gitlab') };
+  return {
+    git: ran.has('git'), jira: ran.has('jira'), reviews: ran.has('github') || ran.has('gitlab'), gitlab: ran.has('gitlab'), sessions: ran.has('sessions'),
+  };
 };
 
 /** A Jira event kind outside JIRA_KINDS (a source may give one): counted as "other". */
@@ -758,6 +720,7 @@ function perDayLines(report, shown) {
     ] : []),
     ...(ran.jira ? [['Jira actions per active day, median · mean', (m) => pair(m.perActiveDay.jiraActions)]] : []),
     ...(ran.reviews ? [['Others\' PRs/MRs reviewed per active day, median · mean', (m) => pair(m.perActiveDay.reviews)]] : []),
+    ...(ran.sessions ? [['Owner messages to agents per active day, median · mean', (m) => pair(m.perActiveDay.messages)]] : []),
     ['Actions per Mon–Fri day of the period', (m) => r1(m.perWorkday?.actions)],
     ...(ran.git ? [['Commits · code + tests lines added per Mon–Fri day of the period', (m) => (m.perWorkday ? `${r1(m.perWorkday.commits)} · ${r0(m.perWorkday.codeTestsAdded)}` : '')]] : []),
     ['Actions in the period', (m) => m.totals.actions],
@@ -766,7 +729,9 @@ function perDayLines(report, shown) {
       ['Code lines +/−', (m) => plusMinus(m.totals.lines.code)],
       ['Test lines +/−', (m) => plusMinus(m.totals.lines.tests)],
       ['Docs lines +/−', (m) => plusMinus(m.totals.lines.docs)],
+      ['Other lines +/−', (m) => plusMinus(m.totals.lines.other)],
     ] : []),
+    ...(ran.sessions ? [['Owner messages to agents in the period', (m) => m.totals.messages]] : []),
     ...(ran.jira ? [[`Jira: created · status changes · edits · comments · worklogs${withOther ? ' · other' : ''}`, jiraRow]] : []),
     ...(ran.gitlab ? [[`GitLab pushes${ran.git ? ' (those in repositories git read are not actions: git counts the commits)' : ''}`, (m) => m.totals.pushes]] : []),
     ...(ran.reviews ? [['Others\' PRs/MRs reviewed (PR × day) · their lines +/−', (m) => `${m.totals.reviews} · ${plusMinus(m.totals.reviewed)}`]] : []),
@@ -811,7 +776,8 @@ function byWeekLines(report, shown) {
     ['Active days', (w) => w.activeDays],
     ['Span h, mean', (w) => r1(w.spanMean)],
     ['Actions', (w) => w.actions],
-    ...(ran.git ? [['Commits', (w) => w.commits], ['Code+tests +', (w) => `+${short(w.codeTestsAdded)}`], ['Docs +', (w) => `+${short(w.docsAdded)}`]] : []),
+    ...(ran.git ? [['Commits', (w) => w.commits], ['Code+tests +', (w) => `+${short(w.codeTestsAdded)}`], ['Docs +', (w) => `+${short(w.docsAdded)}`], ['Other +', (w) => `+${short(w.otherAdded)}`]] : []),
+    ...(ran.sessions ? [['Messages', (w) => w.messages]] : []),
     ...(ran.jira ? [['Jira actions', (w) => w.jiraActions]] : []),
     ...(ran.reviews ? [['Reviews', (w) => w.reviews], ['Reviewed lines', (w) => `+${short(w.reviewed[0])} −${short(w.reviewed[1])}`]] : []),
   ];
@@ -836,8 +802,8 @@ function whatChangedLines(report) {
     if (report.places.length > 1) out.push('', `### ${p.place}`);
     if (!p.activeDays) { out.push('', noActionLine(p)); continue; }
     if (c.repositories.length) {
-      out.push('', ...table(['Repository', 'Commits', 'Days', 'Code+tests', 'Docs', 'Largest commits'],
-        c.repositories.map((r) => [r.repository, r.commits, r.days, plusMinusTight(r.codeTests), plusMinusTight(r.docs), r.largest.join('; ')])));
+      out.push('', ...table(['Repository', 'Commits', 'Days', 'Code+tests', 'Docs', 'Other', 'Largest commits'],
+        c.repositories.map((r) => [r.repository, r.commits, r.days, plusMinusTight(r.codeTests), plusMinusTight(r.docs), plusMinusTight(r.other), r.largest.join('; ')])));
     }
     if (c.jiraProjects.length) out.push('', `Jira actions by project: ${c.jiraProjects.map((j) => `${j.project} ${j.actions}`).join(', ')}.`);
     if (c.issues.length) {
@@ -888,7 +854,7 @@ function byDayLines(report) {
 /**
  * The report as markdown: the header (with the purpose when given, the settings, the place rules
  * and the working day's start), the per-day measures by place, the calendar, the weeks, what
- * changed, the days (a period of up to DAY_TABLE_MAX days unless `by: 'week'`, or `by: 'day'`), the
+ * changed, the fact sections (`renderFacts`), the days (a period of up to DAY_TABLE_MAX days unless `by: 'week'`, or `by: 'day'`), the
  * totals and each source's breakdown, and what was skipped or cut. With two places or more each
  * section shows every place and all places; with one, that place only.
  *
@@ -906,6 +872,7 @@ export function renderMarkdown(report, { person, by, collectedAt, purpose = null
     ...calendarLines(report, shown),
     ...byWeekLines(report, shown),
     ...whatChangedLines(report),
+    ...renderFacts(report.facts),
     ...(showDays ? byDayLines(report) : []),
     '',
     '## Totals',

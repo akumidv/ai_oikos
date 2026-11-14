@@ -43,8 +43,16 @@ export async function atlassianAccount(client, who) {
     + people.slice(0, 10).map((u) => `${u.displayName} (${u.accountId})`).join('; '));
 }
 
-/** The issues of `jql` with `fields`, following nextPageToken, at most `cap`: { issues, more }. */
-async function search(jira, jql, fields, cap) {
+/**
+ * The issues of `jql` with `fields`, following nextPageToken, at most `cap`.
+ *
+ * @param {{ get: (path: string) => Promise<object> }} jira an `atlassianClient`
+ * @param {string} jql
+ * @param {string} fields comma-separated issue fields
+ * @param {number} cap the most issues returned
+ * @returns {Promise<{ issues: object[], more: boolean }>} `more` when the search had further issues
+ */
+export async function searchIssues(jira, jql, fields, cap) {
   const issues = [];
   let token;
   for (;;) {
@@ -138,7 +146,7 @@ export async function collectJira(jira, { who, me, since, until, tz, dayStartsMi
   // A day of slack before the period: Jira reads the date in the account's time zone.
   const jql = `updated >= "${addDays(since, -1)}" AND (creator = ${person} OR reporter = ${person} OR assignee WAS ${person} `
     + `OR watcher = ${person} OR status CHANGED BY ${person} OR worklogAuthor = ${person})`;
-  const candidates = await search(jira, jql, 'summary,project,created,creator', CANDIDATE_CAP);
+  const candidates = await searchIssues(jira, jql, 'summary,project,created,creator', CANDIDATE_CAP);
   const period = { since, until, tz, dayStartsMin };
   const events = [];
   const hours = new Map();
@@ -177,6 +185,9 @@ export async function collectJira(jira, { who, me, since, until, tz, dayStartsMi
     "Jira reads the dates of a query in the time zone of the credential's account; the actions are laid on days by their instant in the report's zone",
     'which issues are read depends on their state now (updated since the period began, the person among their people): a later run can find more actions on older days',
   ];
+  const partial = [];
+  if (candidates.more) partial.push(`candidate issues cut at ${CANDIDATE_CAP}`);
+  if (skipped.length) partial.push(`${skipped.length} issue(s) could not be read`);
   if (candidates.more) notes.push(`candidate issues cut at ${CANDIDATE_CAP}: the actions and hours are a lower bound`);
   if (skipped.length) notes.push(`${skipped.length} issue(s) could not be read (404 deleted or moved, 403 no access) and are left out: ${skipped.sort().join(', ')}`);
   notes.push(...rateLimitNotes(limits.waits, 'Jira'));
@@ -185,6 +196,7 @@ export async function collectJira(jira, { who, me, since, until, tz, dayStartsMi
   return {
     source: 'jira',
     label: `Jira ${id}`,
+    ...(partial.length ? { partial: true, partialReasons: partial } : {}),
     totals: [
       ...MEASURES.map(([kind, measure]) => [measure, count(kind)]),
       ['hours logged', round(total)],

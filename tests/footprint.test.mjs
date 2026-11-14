@@ -109,15 +109,15 @@ test('git: commits of the author in the period, code and docs lines, generated l
   assert.equal(r.status, 0, r.output);
   assertNoCrashNoRequest(r);
   assert.deepEqual(totals(r.report, 'git'), {
-    commits: 2, repositories: 1, 'files changed': 3, 'code lines': '+4 −1', 'tests lines': '+0 −0', 'docs lines': '+2 −0', 'generated lines left out': 5,
-    'commits left out by skip_commits': 0, 'pipeline lines': '+0 −0',
+    commits: 2, repositories: 1, 'files changed': 3, 'code lines': '+4 −1', 'tests lines': '+0 −0', 'docs lines': '+2 −0', 'other lines': '+0 −0', 'generated lines left out': 5,
+    'commits left out by skip_commits': 0, 'pipeline lines': '+0 −0', 'tests added': 0,
   });
   assert.equal(r.report.purpose, 'weekly report');
   assert.equal(day(r.report, '2026-03-02').bySource.git, 1);
   assert.equal(day(r.report, '2026-03-02').first, '10:00');
   assert.equal(day(r.report, '2026-03-03').bySource.git, 1);
-  assert.deepEqual(r.report.sources[0].breakdown.header, ['Repository', 'Commits', 'Code +', 'Code −', 'Tests +', 'Tests −', 'Docs +', 'Docs −', 'First', 'Last']);
-  assert.deepEqual(r.report.sources[0].breakdown.rows, [['app', 2, 4, 1, 0, 0, 2, 0, '2026-03-02', '2026-03-03']]);
+  assert.deepEqual(r.report.sources[0].breakdown.header, ['Repository', 'Commits', 'Code +', 'Code −', 'Tests +', 'Tests −', 'Docs +', 'Docs −', 'Other +', 'Other −', 'First', 'Last']);
+  assert.deepEqual(r.report.sources[0].breakdown.rows, [['app', 2, 4, 1, 0, 0, 2, 0, 0, 0, '2026-03-02', '2026-03-03']]);
   assert.match(notesOf(r.report, 'git'), /branches, tags and remote-tracking branches are read \(not the stash or notes\); they hold only what was fetched/);
 });
 
@@ -185,10 +185,13 @@ test('git: a rename counts under its new path, a binary file as a file only, a q
   const r = collect(dir, [], ['--email', ADA, '--repos', repo, '--source', 'git', '--tz', 'UTC'], { ...GIT_RUN, ...hostile });
   assert.equal(r.status, 0, r.output);
   assert.deepEqual(totals(r.report, 'git'), {
-    commits: 3, repositories: 1, 'files changed': 6, 'code lines': '+4 −1', 'tests lines': '+0 −0', 'docs lines': '+5 −1', 'generated lines left out': 5,
-    'commits left out by skip_commits': 0, 'pipeline lines': '+0 −0',
+    commits: 3, repositories: 1, 'files changed': 6, 'code lines': '+4 −1', 'tests lines': '+0 −0', 'docs lines': '+5 −1', 'other lines': '+0 −0', 'generated lines left out': 5,
+    'commits left out by skip_commits': 0, 'pipeline lines': '+0 −0', 'tests added': 0,
   });
 });
+
+/** The commit events of a git result: the facts (first commit, tags, …) beside them are not commits. */
+const commitsOf = (result) => result.events.filter((e) => e.kind === 'commit');
 
 /** A history with a commit committed before the window (an import, a rebase keeping the author dates) and the person's commits on both sides of it. */
 function importedHistory() {
@@ -219,7 +222,7 @@ test('git: --since-as-filter from git 2.37, no date limit before it — both cou
   for (const version of ['git version 2.36.6', 'git version 2.37.0']) {
     const result = collectGit([repo], query, { gitVersion: () => version });
     assert.equal(Object.fromEntries(result.totals).commits, 3, version);
-    assert.deepEqual(result.events.map((e) => e.at.slice(0, 10)).sort(), ['2026-03-02', '2026-03-03', '2026-03-05'], version);
+    assert.deepEqual(commitsOf(result).map((e) => e.at.slice(0, 10)).sort(), ['2026-03-02', '2026-03-03', '2026-03-05'], version);
   }
 });
 
@@ -239,19 +242,21 @@ test('git: test files are their own kind, skip_commits left out and counted apar
     skipCommits: [{ pattern: /^agent host session/i, repos: [] }], generated: [/(^|\/)\.claude\//i], pipelineRepos: ['team-notes'],
   }, { gitVersion: () => 'git version 2.40.0' });
   assert.deepEqual(Object.fromEntries(result.totals), {
-    commits: 4, repositories: 2, 'files changed': 8, 'code lines': '+4 −1', 'tests lines': '+5 −0', 'docs lines': '+2 −0',
-    'generated lines left out': 8, 'commits left out by skip_commits': 1, 'pipeline lines': '+3 −0',
+    commits: 4, repositories: 2, 'files changed': 8, 'code lines': '+4 −1', 'tests lines': '+5 −0', 'docs lines': '+2 −0', 'other lines': '+0 −0',
+    'generated lines left out': 8, 'commits left out by skip_commits': 1, 'pipeline lines': '+3 −0', 'tests added': 0,
   });
-  const tested = result.events.find((e) => e.at.startsWith('2026-03-04'));
+  const tested = commitsOf(result).find((e) => e.at.startsWith('2026-03-04'));
+  assert.match(tested.id, /^[0-9a-f]{40}$/);
   assert.deepEqual(tested, {
-    at: '2026-03-04T09:00:00Z', kind: 'commit', what: 'acme/app: change by Ada', where: `${join(work, 'app')} https://git.example.com/acme/app.git`,
-    lines: { code: [0, 0], tests: [5, 0], docs: [0, 0] },
+    id: tested.id, at: '2026-03-04T09:00:00Z', kind: 'commit', what: 'acme/app: change by Ada', where: `${join(work, 'app')} https://git.example.com/acme/app.git`,
+    lines: { code: [0, 0], tests: [5, 0], docs: [0, 0], other: [0, 0] },
+    detail: { repo: 'acme/app', testsAdded: 0, codes: [], keys: [], decisionDirs: [], decisionPaths: [] },
   });
-  const piped = result.events.filter((e) => e.where.includes('team-notes'));
+  const piped = commitsOf(result).filter((e) => e.where.includes('team-notes'));
   // The fixture's commits there are copies of app's (same author, date and subject): the one of the 6th is its own.
   assert.equal(piped.length, 1);
   assert.ok(piped.every((e) => e.kind === 'commit' && e.lines === undefined));
-  assert.ok(!result.events.some((e) => e.at.startsWith('2026-03-05')), 'the checkpoint is no event');
+  assert.ok(!commitsOf(result).some((e) => e.at.startsWith('2026-03-05')), 'the checkpoint is no event');
   assert.deepEqual(result.breakdown.rows.map((r) => r[0]), ['acme/app', 'team-notes']);
   assert.deepEqual(result.breakdown.wheres, [`${join(work, 'app')} https://git.example.com/acme/app.git`, join(work, 'team-notes')]);
   assert.match(result.notes.join('\n'), /a repository is named by its remote \(owner\/name\), so two clones of one remote are one repository/);
@@ -358,7 +363,7 @@ test('git: with day_starts a commit belongs to its working day — 01:30 after t
   commit('Ada', ADA, '2026-03-08T01:30:00+00:00', { 'src/late.js': 'l\n' });
   commit('Ada', ADA, '2026-03-01T02:00:00+00:00', { 'src/early.js': 'e\n' });
   const query = { authors: [ADA], since: SINCE, until: UNTIL, tz: 'UTC' };
-  const at = (result) => result.events.map((e) => e.at.slice(0, 16)).sort();
+  const at = (result) => commitsOf(result).map((e) => e.at.slice(0, 16)).sort();
   const midnight = collectGit([repo], query, { gitVersion: () => 'git version 2.40.0' });
   assert.deepEqual(at(midnight), ['2026-03-01T02:00', '2026-03-02T10:00', '2026-03-03T23:30']);
   const four = collectGit([repo], { ...query, dayStartsMin: 240 }, { gitVersion: () => 'git version 2.40.0' });
@@ -409,7 +414,7 @@ test('git --me: the installation\'s git email everywhere, and in a repository it
   assert.equal(day(r.report, '2026-03-05').bySource.git, 1);
   const notes = notesOf(r.report, 'git');
   assert.match(notes, /authors matched: ada@acme\.example, ada\.home@example\.com$/m);
-  assert.match(notes, /the address the user commits with in a repository \(its git user\.email\) is matched there: ada\.home@example\.com in lib$/m);
+  assert.match(notes, /the addresses the repositories' git configurations give \(user\.email\) are matched in every repository: ada\.home@example\.com \(set in lib\)$/m);
 });
 
 // The report's own sections are tested in footprint-report.test.mjs: here what the sources put in it.
@@ -743,6 +748,8 @@ test('jira: an issue that answers 404 or 403 is skipped and named; a 429 is wait
   const notes = result.notes.join('\n');
   assert.match(notes, /^2 issue\(s\) could not be read \(404 deleted or moved, 403 no access\) and are left out: PROJ-7 \(404\), SEC-1 \(403\)$/m);
   assert.match(notes, /^Jira's rate limit was met 1 time\(s\): waited 0 s in all$/m);
+  assert.equal(result.partial, true); // issues left out: the store merges the crawl by id
+  assert.deepEqual(result.partialReasons, ['2 issue(s) could not be read']);
 });
 
 test('jira: each action an event of the person at its instant — created, status, edit, comment, worklog at its writing; kind, what, where', async () => {
@@ -948,7 +955,7 @@ const WEEK_TOTALS = {
   reviews: 2, 'reviews by state': 'approved 1, commented 1', 'reviews on own pull requests': 0, "others' pull requests reviewed": 1,
   "others' pull requests merged by them": 2, "others' pull requests reviewed or merged": 2,
   'reviewed volume (their lines, once per pull request)': '+40 −5', 'reviewed or merged volume (their lines, once per pull request)': '+43 −6',
-  'comments on pull requests': 0, 'commits in pull requests': 2,
+  'comments on pull requests': 0, 'commits in pull requests': 2, 'issues closed': 0,
 };
 const ORG_REPOS = 'https://api.github.com/orgs/acme-corp/repos?type=all&per_page=100';
 
@@ -967,10 +974,13 @@ test('github with GITHUB_ORG: the repositories over two pages, a probe, each act
     pulls('web', null, repoPage([PR3, PR4, PR1, NOT_HERS], 'w1')),
     pulls('web', 'w1', repoPage([oldPullRequest('PR6', 'acme-corp/web')], 'w2')),
     pulls('api', null, repoPage([PR2, oldPullRequest('PR7', 'acme-corp/api')], 'a1')),
+    // Issues closed and the first pull request: nothing found (the releases' and issues' own tests are footprint-releases.test.mjs).
+    { graphql: 'OikosFootprintClosedIssues', body: { data: searchPage([]) } },
+    { graphql: 'OikosFootprintFirstPull', body: { data: searchPage([]) } },
   ], ['--github', 'ada', '--source', 'github', '--tz', 'Europe/Zurich'], GITHUB_ENV);
   assert.equal(r.status, 0, r.output);
   assertNoCrashNoRequest(r);
-  assert.deepEqual(totals(r.report, 'github'), { ...WEEK_TOTALS, 'issues opened': 2 });
+  assert.deepEqual(totals(r.report, 'github'), { ...WEEK_TOTALS, 'issues opened': 2, 'GitHub releases': 0 });
   assert.deepEqual(r.report.sources[0].totals.map(([m]) => m).slice(7, 12), [
     "others' pull requests reviewed", "others' pull requests merged by them", "others' pull requests reviewed or merged",
     'reviewed volume (their lines, once per pull request)', 'reviewed or merged volume (their lines, once per pull request)',
@@ -984,7 +994,8 @@ test('github with GITHUB_ORG: the repositories over two pages, a probe, each act
   assert.deepEqual(r.report.sources[0].breakdown.rows, [['acme-corp/api', 0, 0, 1, 0, 0, 2, 0, 1], ['acme-corp/web', 1, 1, 1, 10, 2, 0, 0, 1]]);
   assert.deepEqual(r.report.sources[0].breakdown.places, ['ACME Corp', 'ACME Corp']);
   const queries = r.calls.filter((c) => c.body?.query);
-  assert.ok(!queries.some((c) => /search\(|organization\(/.test(c.body.query)), 'no search, no organization lookup');
+  // Issues closed and the first pull request are searches of their own; the pull requests are not.
+  assert.ok(!queries.some((c) => /search\(|organization\(/.test(c.body.query) && !/OikosFootprint(ClosedIssues|FirstPull)/.test(c.body.query)), 'no search of pull requests, no organization lookup');
   const probes = queries.filter((c) => c.body.query.includes('OikosFootprintProbe'));
   assert.equal(probes.length, 1);
   // A day before the period's first instant, itself an hour wider than the period (a daylight-saving change).
@@ -994,7 +1005,7 @@ test('github with GITHUB_ORG: the repositories over two pages, a probe, each act
   const notes = notesOf(r.report, 'github');
   assert.match(notes, /pull requests of the 3 repositories of GITHUB_ORG acme-corp the token can read \(archived included\), read per repository — not through search: 2 had a pull request updated since 2026-02-27/);
   assert.match(notes, /commits pushed directly to a branch without a pull request are not seen here: the git source counts them/);
-  assert.doesNotMatch(notes, /lower bound|monthly windows|read up to|shrunk|rate limit/);
+  assert.doesNotMatch(notes, /every total here is a lower bound|issues opened is a lower bound|monthly windows|read up to|shrunk|rate limit/);
 });
 
 /** A client for the organization route: `repos` listed, the GraphQL answered by `answer(query, variables)`; every call recorded. */
@@ -1013,7 +1024,7 @@ const probeAnswer = (variables, active) => Object.fromEntries(Object.entries(var
   .map(([k, name]) => [`r${k.slice(1)}`, probed(active.includes(name) ? '2026-03-06T00:00:00Z' : '2025-01-01T00:00:00Z')]));
 const ORG_QUERY = { login: 'ada', org: 'acme-corp', since: SINCE, until: UNTIL, tz: 'UTC' };
 
-test('github with GITHUB_ORG, 150 repositories and 5 active: 6 probes of 25 and one page each of the 5 — 11 GraphQL requests', async () => {
+test('github with GITHUB_ORG, 150 repositories and 5 active: 6 probes of 25 and one page each of the 5, issues closed and the first pull request — 13 GraphQL requests', async () => {
   const names = Array.from({ length: 150 }, (_, i) => `repo${i}`);
   const active = names.filter((_, i) => i % 30 === 0);
   const { calls, g } = fakeOrg(names, (query, variables) => (query.includes('OikosFootprintProbe') ? probeAnswer(variables, active) : repoPage([])));
@@ -1021,7 +1032,7 @@ test('github with GITHUB_ORG, 150 repositories and 5 active: 6 probes of 25 and 
   const graphql = calls.filter((c) => c.query);
   assert.equal(graphql.filter((c) => c.query.includes('OikosFootprintProbe')).length, 6);
   assert.deepEqual(graphql.filter((c) => c.query.includes('OikosFootprintRepoPulls')).map((c) => c.variables.name), active);
-  assert.equal(graphql.length, 11);
+  assert.equal(graphql.length, 13);
   assert.deepEqual(calls.filter((c) => c.path).map((c) => c.path), ['/orgs/acme-corp/repos?type=all']);
   assert.match(result.notes.join('\n'), /the 150 repositories of GITHUB_ORG acme-corp .* 5 had a pull request updated since/);
 });
@@ -1072,6 +1083,7 @@ test('github: every review and commit of a pull request read page by page past t
     if (query.includes('OikosFootprintMoreCommits')) {
       return { node: { commits: variables.after === 'k1' ? more([prCommit('a1', 'ada', at(4, '09:00'))], 'k2') : more([prCommit('a2', 'ada', at(5, '09:00'))]) } };
     }
+    if (/OikosFootprint(ClosedIssues|FirstPull)/.test(query)) return searchPage([]);
     throw new Error(`unexpected query ${query.slice(0, 40)}`);
   });
   const result = await collectGithub(g, ORG_QUERY, { pauseMs: 0 });
@@ -1147,6 +1159,7 @@ function fakeGithub(pulls) {
   const graphql = async (query, variables) => {
     calls.push({ query, variables });
     if (query.includes('OikosFootprintIssues')) return { search: { issueCount: 3 } };
+    if (/OikosFootprint(ClosedIssues|FirstPull)/.test(query)) return searchPage([]);
     const [, from, to] = variables.q.match(/updated:(\S+)\.\.(\S+)/);
     return pulls(from, to, variables);
   };
@@ -1184,6 +1197,8 @@ test('github without GITHUB_ORG: a window above 1000 results is split in halves 
   assert.deepEqual(ranges.filter((r) => r.split('..')[0] === r.split('..')[1]).map((r) => r.split('..')[0]), days);
   assert.equal(Object.fromEntries(result.totals)['pull requests opened'], 7); // 03-01 … 03-07, the 2nd once
   assert.match(result.notes.join('\n'), /at most 1000 pull requests per query: cut on 2026-03-03: 1001/);
+  assert.equal(result.partial, true);
+  assert.deepEqual(result.partialReasons, ['search cut at its per-query cap']);
 });
 
 test('github without GITHUB_ORG: monthly windows from the day before the period to today', async () => {

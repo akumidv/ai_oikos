@@ -30,6 +30,7 @@ it before starting.
 |---|---|---|
 | A person over a period | "what did Ada do last quarter", "my footprint for the week", "activity report for", "material for the review", "my contributions for the CV" | [scenarios/period-report.md](scenarios/period-report.md) |
 | Activity against recorded hours | "how many hours did I log vs commits", "compare the worklog with the activity", a timesheet next to the timeline | [scenarios/against-hours.md](scenarios/against-hours.md) |
+| Team facts | "how big is the team", "who is on the project", "which versions did the team release", a team's composition for a lead's CV | [scenarios/team-facts.md](scenarios/team-facts.md) |
 
 A new typical task gets its own file in `scenarios/` and a row here. The user's own CV kept from
 these facts is the `cv` skill's scenario `own-cv`.
@@ -59,7 +60,11 @@ these facts is the `cv` skill's scenario `own-cv`.
 - **Sources are counted apart.** The same commit is in git and on GitHub, a merge request is both
   a GitLab event and a link in a Jira issue: each source has its own totals and there is no grand
   total of events.
-- **Read-only.** Nothing is written to any resource; the tool has no write command.
+- **Agent sessions are the user's own.** `sessions` reads the transcripts on this machine with `--me`
+  only, keeps no text, and counts agents' final summaries as facts, not as the person's work. Team facts
+  (`--source team`) describe a team: members are marked, never ranked.
+- **Read-only.** Nothing is written to any resource; the tool has no write command. Its store under
+  `.local/` is the installation's own working file, rewritten by `collect`, never sent anywhere.
 - **Answer in the user's language**; the report's measures stay as the tool prints them.
 
 ## Sources and what each needs
@@ -69,12 +74,14 @@ have code; the others are collected by hand (next section).
 
 | Source | What is counted | Identity | Needs |
 |---|---|---|---|
-| git | commits by author date, each at its time with its repository and subject; repositories, files, lines added and removed as code, tests and docs; generated files (lock files, minified, maps, snapshots, `dist/`, `vendor/`, and the settings' `generated` paths) left out and counted apart; commits whose subject matches the settings' `skip_commits` (everywhere, or in the repositories a rule names) left out and counted apart; the lines of the settings' `pipeline_repos` counted apart (their commits keep their time); a rebased or cherry-picked copy counted once. A repository is named by its remote (`owner/name`, not the folder), so two clones of one remote are one repository and a commit in both counts once; the remote's credentials (`https://user:token@…`, a password with `/` or `@` in it too) are dropped before anything is shown; the submodules of a repository found are repositories of their own | the author's email(s) or name (`--email` exactly, `--name` as a substring whose case may be ignored for ASCII letters only) | local clones under `--repos`, fetched first: their branches, tags and remote-tracking branches are read (not the stash or notes), so only what was fetched is seen; the user's git configuration applies, except the settings that change the counts (renames, mailmap off, …) |
+| git | commits by author date, each at its time with its repository and subject; repositories, files, lines added and removed as code, tests, docs and other (config and data: `.json`, `.yaml`, `.toml`, `.csv`, and any file with no known code or doc extension, such as dotfiles); generated files (lock files, minified, maps, snapshots, `dist/`, `vendor/`, and the settings' `generated` paths) left out and counted apart; commits whose subject matches the settings' `skip_commits` (everywhere, or in the repositories a rule names) left out and counted apart; the lines of the settings' `pipeline_repos` counted apart (their commits keep their time); a rebased or cherry-picked copy counted once. A repository is named by its remote (`owner/name`, not the folder), so two clones of one remote are one repository and a commit in both counts once; the remote's credentials (`https://user:token@…`, a password with `/` or `@` in it too) are dropped before anything is shown; the submodules of a repository found are repositories of their own | the author's email(s) or name (`--email` exactly, `--name` as a substring whose case may be ignored for ASCII letters only) | local clones under `--repos`, fetched first: their branches, tags and remote-tracking branches are read (not the stash or notes), so only what was fetched is seen; the user's git configuration applies, except the settings that change the counts (renames, mailmap off, …) |
 | github | with `GITHUB_ORG`: the organization's repositories listed and each active one's pull requests read newest-updated first — complete for what the token can read; without it: GitHub search (`involves:` the person) across the whole of GitHub, which can return incomplete results — a lower bound. Pull requests opened (and of them those merged since) with their lines, pull requests merged by the person, reviews and reviews by state on others' pull requests (those on the person's own counted apart), others' pull requests reviewed, merged by the person, and reviewed or merged (the lines of the reviewed and of the reviewed-or-merged ones, once per pull request), the person's commits on the pull requests found (all of them, read page by page); each pull request opened, review, review comment, comment, merge and commit an action at its time, with its repository; on others' pull requests the reviewed lines once per pull request and day, on the first review, review comment or merge — a conversation comment alone is no review and carries none; issues opened; per repository. Commits pushed without a pull request are git's | the login (`--github`) | the `github` connector listed; `GITHUB_TOKEN` (the `repo` scope reads private organization work; `read:org` is not needed); `GITHUB_ORG` names the organization to read whole (recommended), else search covers the whole of GitHub |
 | gitlab | every event with its kind and project, each an action at its time: pushes and their commits, branches and tags deleted, merge requests opened, merged by the person and approved, comments, issues; others' merge requests the person approved, merged or commented on are read once each for their author, and those approved or merged for their lines in the diff (the reviewed volume — a lower bound where GitLab does not show a diff or cuts it), once per merge request and day — a comment alone is no review and carries no lines; a project that cannot be looked up is shown by id in the default place; per project | the username (`--gitlab`) | the `gitlab` connector listed; `GITLAB_TOKEN`, `GITLAB_URL`; GitLab keeps events for three years |
 | jira | the person's actions, each at its time, on the issues they had to do with (created, reported, assigned at some time, watched, moved or logged on, and updated in the period; up to 1000): issues created, status changes and other edits from each issue's changelog, comments, worklogs; worklog hours on the calendar date of their start. A comment on an issue outside these is missed; which issues are read depends on their state now, so a later run can find more actions on older days; an issue that answers 404 or 403 is skipped and named | the account id, email or name (`--atlassian`) | the `jira` connector listed; its credentials |
 | confluence | pages and blog posts created (with the words of their current text); edits — the versions the person saved in the period (version 1, the creation, is not an edit) of the pages they ever contributed to that changed since the period began (at most 500 pages looked into); per space | the account id, name or email (`--atlassian`; Confluence finds no one by email, so an email is resolved through Jira where the `jira` connector is listed with its credentials, else refused) | the `confluence` connector listed; its credentials |
 | hours | recorded hours per day from a timesheet | — | a CSV file (`--hours`) |
+| sessions | agent transcripts of Claude Code, Qwen Code and Codex on this machine: owner messages to an agent (actions, with their words), the agents' final summaries (facts: words, decision requests with their codes, answered or not), delegations and choice dialogues (facts); the repository is the clone that holds the session's working folder (`--repos`), else the folder; with `--repos` only the sessions in those clones or their worktrees count, the others are noted; messages matching `sessions_skip_prompts` are noted and counted nowhere, and so is a session left with no owner message by them (started by a tool); the answer to a choice dialog counts as an owner message (the words of the chosen answers); so does a side-agent note the owner forwards, with only the owner's own words around it as owner words and the note's words counted as read. No text is stored: counts, codes and flags only. Sub-agent threads are skipped; a transcript last changed before the period is not read | `--me` only: the transcripts on this machine are the user's | none; a host whose folder is missing is noted, and `sessions` in the settings switches a host off or moves its folder |
+| team | facts about a team, not a person: per Jira project its lead, versions released in the period and the people assigned to issues updated in the period; per repository the authors in the period. Members are marked by the user's rule (`team.members`), people are listed by name, never ranked | none (the team's rule is the setting) | not in the default sources: `--source team` only; Jira where `jira` is listed, git through `--repos` |
 
 A source runs only when its connector is listed under some skill in the installation's
 `oikos.yaml`; one that is not listed, has no credential or does not know the person is reported
@@ -97,8 +104,10 @@ node oikos/tools/footprint/cli.mjs collect --since 2026-07-01 --me --repos ~/src
 
 `collect` flags: `--since YYYY-MM-DD` (required), `--until` (default today), `--tz` (IANA, default
 the system's: days and weeks are local dates in it), `--repos` (repeatable; a repository or a
-folder with repositories up to two levels down; read only when git is collected), `--source
-git,github,…` (default every available), `--hours file.csv` (repeatable), `--by day|week` (the
+folder with repositories up to two levels down; read by git, sessions and team), `--source
+git,github,…` (default every available source except `team`, which runs only when named), `--uncommitted`
+(git: the clones' uncommitted and untracked lines, as a snapshot fact), `--no-save` (the events are not
+written to the store; see the next section), `--hours file.csv` (repeatable), `--by day|week` (the
 by-day table is shown for periods of up to 31 days; `--by week` leaves it out whatever the length,
 `--by day` adds it whatever the length), `--person "display name"` for the report's header,
 `--purpose "what the report is for"` printed under the title (`purpose` in `--json`), `--config
@@ -134,6 +143,13 @@ The report:
 - **By day** (up to 31 days, or `--by day`) — a row per day and place: first and last action,
   events per source, hours, and the content (repositories with their lines, issue keys with their
   actions);
+- **Facts** — sections of their own, not the person's actions, each defined in
+  [the design](../../docs/design/footprint.md): **Sessions** (per place and repository, a by-week table,
+  the words read against `reading_reference`); **Meaning of changes** (lines by kind, tests added,
+  deleted ÷ added); **Decisions** (decision documents added or decided in the period, ADRs with status
+  and first author, amendments); **Releases** (tags, CHANGELOG entries, GitHub releases, production
+  releases by rule); **Decision chain** (each decision code asked: answered, documents with their repository, commits, release,
+  task keys, status changes); **Uncommitted and first activity**; **Team facts** (only with `team` run).
 - **Totals** per source, each source's **breakdown** (with a Place column where its rows have a
   place), and **Notes** — what was skipped, cut at a cap or not counted, and a period that ends
   today (the day is still running).
@@ -149,6 +165,35 @@ clone, or not under `--repos`) is an action, as is every one without git. A revi
 lines once; a conversation comment, a commit, a push, a close or a reopen is not a review. Hours
 stay on their calendar date. `--json` gives the same report as plain objects and arrays (a
 breakdown's rows carry their places, not the paths or remotes they were matched on).
+
+### The store and `slice`
+
+`collect` saves the events its sources returned into `.local/footprint/events/<person>/` — one
+`<source>.jsonl` per source and `crawls.jsonl` (one line per source per crawl, with the repositories
+and identity it ran with) — unless `--no-save` is given. `slice` reads that store and reports any number
+of windows without collecting again, so a year is collected once and sliced by quarter or week:
+
+```bash
+node oikos/tools/footprint/cli.mjs collect --since 2026-01-01 --until 2026-09-30 --me --repos ~/src --purpose "CV"
+node oikos/tools/footprint/cli.mjs slice --window 7 --window 30 --until 2026-09-30 --by week --purpose "weekly report"
+node oikos/tools/footprint/cli.mjs slice --window 2026-07-01 --until 2026-09-30 --out .local/footprint/reports   # one .md per window
+```
+
+- `--window` (repeatable, required): a number is that many days ending at `--until` (default today);
+  a date is that day through `--until`.
+- `--person` defaults to the only person in the store, or to `me` when several are stored; with several
+  and no `me` it asks for `--person`. An empty store exits 1 and says to run `collect` first.
+- Places and the working day are read from the settings at slice time, so a changed place rule
+  applies to stored events; the totals per source are counted from the events.
+- A window, or part of one, that no crawl of a source covered is named in the Notes.
+- A re-crawl that uses other repositories or another identity than the earlier crawl of the same
+  period says so, and replaces the earlier crawl's events of the overlap (it does not stop).
+- A partial crawl (a repository, host, request or transcript that failed or was cut) is merged by id: a
+  stored event is replaced only by a new one with the same id, and the Notes say so. `sessions` replaces only the events of the transcripts it read,
+  so events of transcripts the host has since deleted are kept. The rules are in the design's § Store.
+- `--out <dir>` writes one file per window instead of printing; `--json` gives the report objects.
+
+Snapshots (uncommitted work, first activity, project leads) are read whatever the window.
 
 ### Places and settings
 
@@ -167,6 +212,14 @@ skip_commits:                          # subjects of a tool's snapshot commits: 
 generated: ["(^|/)\\.claude/skills/"]  # paths whose lines are a tool's output, added to the built-in ones
 pipeline_repos: [acme/knowledge]       # repositories whose lines are a pipeline's output: counted apart
 day_starts: "04:00"                    # --day-starts; an action before it belongs to the day before
+sessions: { claude: ~/.claude/projects, qwen: false }  # agent transcripts per host: a folder, or false = off; absent = the host's default
+sessions_skip_prompts: ["^Run the nightly digest"]  # regexes of messages a tool sent in the owner's name: not the owner's, counted nowhere
+decision_headings: ["Needed from you"]  # headings that open a decision request in an agent's final summary (case-insensitive)
+decision_codes: "\\b[DQ]-[A-Z0-9]+\\b"  # what a decision code looks like (a regular expression)
+decision_dirs: [docs/adr, docs/design] # folders whose .md files are decision documents (default: adr, design, measurements, reviews)
+reading_reference: { label: a long novel, words: 100000 }  # words the agents' final summaries are read against; none by default
+releases: { rule: merge-days, base: main, repos: [acme/app] }  # production release = a day a pull request merged into base
+team: { members: [ada@example.com], projects: [PROJ] }  # who counts as the team (marks people, never ranks them), its Jira projects
 ```
 
 A pattern is matched against git — the repository's absolute path and its `remote.origin.url`;
